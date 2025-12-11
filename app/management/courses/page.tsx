@@ -1,26 +1,9 @@
 'use client';
 
-import React, { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store';
+import Link from 'next/link';
 import { Layout } from '@/components/layout';
-import { Card, Button } from '@/components/ui';
-import { FiArrowLeft } from 'react-icons/fi';
 
 export default function CoursesPage() {
-  const router = useRouter();
-  const user = useAuthStore((state) => state.user);
-
-  useEffect(() => {
-    if (!user) {
-      router.push('/login');
-    }
-  }, [user, router]);
-
-  if (!user) {
-    return null;
-  }
-
   const courses = [
     { id: '1', name: 'Curso 1-A', level: 'Primaria', students: 30 },
     { id: '2', name: 'Curso 1-B', level: 'Primaria', students: 28 },
@@ -31,36 +14,35 @@ export default function CoursesPage() {
   return (
     <Layout>
       <div className="space-y-6">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="outline"
-            onClick={() => router.push('/dashboard')}
-          >
-            <FiArrowLeft size={18} />
-          </Button>
+        <div className="flex items-center justify-between">
           <div>
+            <p className="text-sm text-gray-500">Gestión escolar</p>
             <h1 className="text-4xl font-bold text-gray-900">Gestionar Cursos</h1>
             <p className="text-gray-600 mt-1">Administra los cursos de tu institución</p>
           </div>
+          <Link
+            href="/dashboard"
+            className="text-primary hover:text-green-800 transition-colors"
+          >
+            ← Volver al dashboard
+          </Link>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {courses.map((course) => (
-            <Card key={course.id} className="p-6 cursor-pointer hover:shadow-lg transition-shadow">
+            <div key={course.id} className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow cursor-pointer">
               <h3 className="text-lg font-semibold text-gray-900">{course.name}</h3>
               <p className="text-sm text-gray-600 mt-1">{course.level}</p>
               <p className="text-sm text-gray-600 mt-2">
                 {course.students} estudiantes
               </p>
-              <Button
-                variant="primary"
-                size="sm"
-                fullWidth
-                onClick={() => console.log('Ver curso')}
+              <button
+                onClick={() => alert('Detalles del curso: ' + course.name)}
+                className="mt-4 w-full px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
               >
                 Ver Detalles
-              </Button>
-            </Card>
+              </button>
+            </div>
           ))}
         </div>
       </div>

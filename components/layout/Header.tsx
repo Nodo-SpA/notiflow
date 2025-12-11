@@ -39,6 +39,9 @@ export const Header: React.FC = () => {
                 <div className="text-right">
                   <p className="text-sm font-medium text-gray-900">{user.name}</p>
                   <p className="text-xs text-gray-500 capitalize">{user.role}</p>
+                  <p className="text-xs text-gray-500">
+                    {user.schoolName || `Colegio ${user.schoolId}`}
+                  </p>
                 </div>
                 <button
                   onClick={handleLogout}
@@ -72,6 +75,9 @@ export const Header: React.FC = () => {
                 <div className="mb-4 text-sm">
                   <p className="font-medium text-gray-900">{user.name}</p>
                   <p className="text-xs text-gray-500 capitalize">{user.role}</p>
+                  <p className="text-xs text-gray-500">
+                    {user.schoolName || `Colegio ${user.schoolId}`}
+                  </p>
                 </div>
                 <Button
                   variant="danger"

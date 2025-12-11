@@ -1,0 +1,9 @@
+docs_dir: out
+exclude:
+  - node_modules
+  - .git
+  - .gitignore
+  - README.md
+  - package.json
+  - tsconfig.json
+plugins: []

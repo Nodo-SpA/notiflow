@@ -28,6 +28,7 @@ export default function LoginPage() {
           email,
           role: 'teacher',
           schoolId: 'school-1',
+          schoolName: 'Colegio Demo',
         });
         router.push('/dashboard');
       } else {

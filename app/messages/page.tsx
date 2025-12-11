@@ -1,116 +1,90 @@
-'use client';
-
-import React, { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuthStore, useMessageStore } from '@/store';
+import Link from 'next/link';
 import { Layout } from '@/components/layout';
-import { Card, Button, Select } from '@/components/ui';
-import { MessageList } from '@/components/messages/MessageList';
-import { Message } from '@/types';
-import { FiPlus, FiTrash2 } from 'react-icons/fi';
 
 export default function MessagesPage() {
-  const router = useRouter();
-  const user = useAuthStore((state) => state.user);
-  const messages = useMessageStore((state) => state.messages);
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-
-  useEffect(() => {
-    if (!user) {
-      router.push('/login');
-    }
-  }, [user, router]);
-
-  if (!user) {
-    return null;
-  }
-
-  // Mock messages
-  const mockMessages: Message[] = [
+  const mockMessages = [
     {
       id: '1',
       content: 'Recordatorio: Reunión de padres el próximo viernes a las 3 PM',
-      senderId: user.id,
-      senderName: user.name,
-      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      senderName: 'Usuario Demo',
+      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toLocaleDateString(),
       status: 'sent',
-      recipients: [
-        { id: '1', type: 'course', name: 'Curso 6-A', count: 30 },
-      ],
+      recipients: 'Curso 6-A (30 estudiantes)',
     },
     {
       id: '2',
       content: 'No hay clases mañana - feriado nacional',
-      senderId: user.id,
-      senderName: user.name,
-      createdAt: new Date(Date.now() - 1 * 60 * 60 * 1000),
+      senderName: 'Usuario Demo',
+      createdAt: new Date(Date.now() - 1 * 60 * 60 * 1000).toLocaleDateString(),
       status: 'sent',
-      recipients: [{ id: '2', type: 'school', name: 'Todo el Colegio' }],
+      recipients: 'Todo el Colegio',
     },
     {
       id: '3',
       content: 'Evaluación de matemáticas reprogramada para el martes',
-      senderId: user.id,
-      senderName: user.name,
-      createdAt: new Date(),
+      senderName: 'Usuario Demo',
+      createdAt: new Date().toLocaleDateString(),
       status: 'scheduled',
-      recipients: [
-        { id: '3', type: 'level', name: 'Nivel Secundario', count: 120 },
-      ],
+      recipients: 'Nivel Secundario (120 estudiantes)',
     },
   ];
-
-  const filteredMessages = mockMessages.filter((msg) => {
-    if (filterStatus === 'all') return true;
-    return msg.status === filterStatus;
-  });
 
   return (
     <Layout>
       <div className="space-y-6">
-        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
+            <p className="text-sm text-gray-500">Historial</p>
             <h1 className="text-4xl font-bold text-gray-900">Mis Mensajes</h1>
             <p className="text-gray-600 mt-1">
               Historial de mensajes enviados y programados
             </p>
           </div>
-          <Button
-            variant="primary"
-            onClick={() => router.push('/messages/new')}
+          <Link
+            href="/messages/new"
+            className="inline-flex px-6 py-2.5 bg-primary text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
           >
-            <FiPlus size={18} />
-            Nuevo Mensaje
-          </Button>
+            + Nuevo Mensaje
+          </Link>
         </div>
 
-        {/* Filters */}
-        <Card className="p-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select
-              label="Filtrar por estado"
-              options={[
-                { value: 'all', label: 'Todos' },
-                { value: 'sent', label: 'Enviados' },
-                { value: 'scheduled', label: 'Programados' },
-                { value: 'draft', label: 'Borradores' },
-                { value: 'failed', label: 'Error' },
-              ]}
-              value={filterStatus}
-              onChange={(val) => setFilterStatus(val as string)}
-            />
-          </div>
-        </Card>
-
-        {/* Messages List */}
-        <MessageList
-          messages={filteredMessages}
-          emptyMessage="No hay mensajes con este filtro"
-          onMessageClick={(message) => {
-            console.log('Mensaje seleccionado:', message);
-          }}
-        />
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="px-6 py-3 text-left text-sm font-medium text-gray-700">Mensaje</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-gray-700">Destinatarios</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-gray-700">Estado</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-gray-700">Fecha</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {mockMessages.map((message) => (
+                <tr key={message.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-6 py-4 text-sm text-gray-900">
+                    <p className="line-clamp-2">{message.content}</p>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">
+                    {message.recipients}
+                  </td>
+                  <td className="px-6 py-4 text-sm">
+                    <span className={`inline-block px-3 py-1 rounded-full text-xs font-medium ${
+                      message.status === 'sent' ? 'bg-green-100 text-green-700' :
+                      message.status === 'scheduled' ? 'bg-blue-100 text-blue-700' :
+                      'bg-gray-100 text-gray-700'
+                    }`}>
+                      {message.status === 'sent' ? 'Enviado' :
+                       message.status === 'scheduled' ? 'Programado' : 'Borrador'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-500">
+                    {message.createdAt}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </Layout>
   );

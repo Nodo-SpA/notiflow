@@ -1,43 +1,4 @@
-'use client';
-
-import React, { useState } from 'react';
-import { Button, Input, Card } from '@/components/ui';
-import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store';
-
 export default function Home() {
-  const router = useRouter();
-  const setUser = useAuthStore((state) => state.setUser);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-
-    try {
-      if (email && password) {
-        setUser({
-          id: '1',
-          name: 'Profesor Demo',
-          email,
-          role: 'teacher',
-          schoolId: 'school-1',
-        });
-        router.push('/dashboard');
-      } else {
-        setError('Por favor completa todos los campos');
-      }
-    } catch (err: any) {
-      setError(err.message || 'Error al iniciar sesión');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary to-secondary flex items-center justify-center p-4">
       <div className="w-full max-w-md">
@@ -49,53 +10,48 @@ export default function Home() {
           <p className="text-green-100">Sistema de Mensajería Escolar</p>
         </div>
 
-        <Card className="p-8 shadow-2xl">
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow p-8 shadow-2xl">
           <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">
             Iniciar Sesión
           </h2>
 
-          {error && (
-            <div className="mb-4 p-4 bg-red-100 border border-red-300 rounded-lg text-red-700 text-sm">
-              {error}
+          <div className="space-y-4">
+            <div className="w-full">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Correo Electrónico<span className="text-red-500 ml-1">*</span>
+              </label>
+              <input
+                type="email"
+                placeholder="tu@escuela.com"
+                className="w-full px-4 py-2.5 border rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 bg-white hover:border-gray-300"
+              />
             </div>
-          )}
 
-          <form onSubmit={handleLogin} className="space-y-4">
-            <Input
-              label="Correo Electrónico"
-              type="email"
-              placeholder="tu@escuela.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
+            <div className="w-full">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Contraseña<span className="text-red-500 ml-1">*</span>
+              </label>
+              <input
+                type="password"
+                placeholder="••••••••"
+                className="w-full px-4 py-2.5 border rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 bg-white hover:border-gray-300"
+              />
+            </div>
 
-            <Input
-              label="Contraseña"
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-
-            <Button
-              type="submit"
-              variant="primary"
-              fullWidth
-              loading={loading}
-              disabled={loading}
+            <a
+              href="./login"
+              className="font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-2 bg-primary text-white hover:bg-green-700 disabled:bg-gray-400 px-4 py-2.5 text-base w-full block"
             >
-              Iniciar Sesión
-            </Button>
-          </form>
+              Ir al login
+            </a>
+          </div>
 
           <div className="mt-6 pt-6 border-t border-gray-200">
             <p className="text-sm text-gray-600 text-center">
-              Demo: Usa cualquier correo y contraseña para entrar
+              Demo: usa cualquier correo y contraseña para entrar
             </p>
           </div>
-        </Card>
+        </div>
 
         <div className="text-center mt-8 text-white text-sm">
           <p>© 2025 Notiflow. Todos los derechos reservados.</p>

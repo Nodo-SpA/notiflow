@@ -2,14 +2,14 @@
   "name": "notiflow",
   "version": "0.1.0",
   "private": true,
-  "homepage": "https://hectorguzman.github.io/notiflow/",
+  "homepage": "./",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "export": "next build",
+    "build": "next build && node scripts/rename-next.js",
+    "export": "next build && node scripts/rename-next.js",
     "start": "next start",
     "lint": "next lint",
-    "deploy": "next build && gh-pages -d out"
+    "deploy": "npm run build && gh-pages -d out"
   },
   "dependencies": {
     "react": "^18.2.0",

@@ -6,6 +6,7 @@ export interface User {
   email: string;
   role: UserRole;
   schoolId: string;
+  schoolName?: string;
   profileImage?: string;
 }
 

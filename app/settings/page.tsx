@@ -1,26 +1,7 @@
-'use client';
-
-import React, { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/store';
+import Link from 'next/link';
 import { Layout } from '@/components/layout';
-import { Card, Button } from '@/components/ui';
-import { FiArrowLeft, FiSettings } from 'react-icons/fi';
 
 export default function SettingsPage() {
-  const router = useRouter();
-  const user = useAuthStore((state) => state.user);
-
-  useEffect(() => {
-    if (!user) {
-      router.push('/login');
-    }
-  }, [user, router]);
-
-  if (!user) {
-    return null;
-  }
-
   const settingsSections = [
     {
       title: 'Configuración de Escuela',
@@ -47,37 +28,35 @@ export default function SettingsPage() {
   return (
     <Layout>
       <div className="space-y-6">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="outline"
-            onClick={() => router.push('/dashboard')}
-          >
-            <FiArrowLeft size={18} />
-          </Button>
+        <div className="flex items-center justify-between">
           <div>
+            <p className="text-sm text-gray-500">Preferencias</p>
             <h1 className="text-4xl font-bold text-gray-900">Configuración</h1>
             <p className="text-gray-600 mt-1">Gestiona la configuración de tu institución</p>
           </div>
+          <Link
+            href="/dashboard"
+            className="text-primary hover:text-green-800 transition-colors"
+          >
+            ← Volver al dashboard
+          </Link>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {settingsSections.map((section, idx) => (
-            <Card key={idx} className="p-6 cursor-pointer hover:shadow-lg transition-shadow">
+            <div key={idx} className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow">
               <div className="text-4xl mb-3">{section.icon}</div>
               <h3 className="text-lg font-semibold text-gray-900">
                 {section.title}
               </h3>
               <p className="text-sm text-gray-600 mt-2">{section.description}</p>
-              <Button
-                variant="primary"
-                size="sm"
-                fullWidth
-                onClick={() => console.log('Abrir configuración')}
+              <button
+                disabled
+                className="mt-4 w-full px-4 py-2 bg-gray-300 text-gray-500 rounded-lg font-medium cursor-not-allowed"
               >
-                <FiSettings size={16} />
-                Configurar
-              </Button>
-            </Card>
+                En desarrollo
+              </button>
+            </div>
           ))}
         </div>
       </div>
