@@ -6,10 +6,11 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        primary: '#25D366',
-        secondary: '#075E54',
-        accent: '#34B7F1',
-        light: '#F0F0F0',
+        // Paleta cálida y suave para evitar fatiga visual
+          primary: '#8EA6A1',
+          secondary: '#C8B6A6',
+          accent: '#EDE3D6',
+          light: '#FBFAF7',
       },
       fontFamily: {
         sans: ['system-ui', 'sans-serif'],

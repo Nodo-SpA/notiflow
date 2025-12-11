@@ -182,10 +182,10 @@ Ver `types/index.ts` para las interfaces completas.
 ## 🎨 Diseño y Estilos
 
 ### Paleta de Colores (WhatsApp Inspired)
-- **Primary**: #25D366 (Verde WhatsApp)
-- **Secondary**: #075E54 (Verde oscuro)
-- **Accent**: #34B7F1 (Azul claro)
-- **Light**: #F0F0F0 (Gris claro)
+	- **Primary**: #8EA6A1 (Tono pastel suave - verde salvia)
+	- **Secondary**: #C8B6A6 (Arena cálida y neutra)
+	- **Accent**: #EDE3D6 (Marfil suave)
+	- **Light**: #FBFAF7 (Fondo claro casi blanco)
 
 ### Responsividad
 - Mobile-first approach

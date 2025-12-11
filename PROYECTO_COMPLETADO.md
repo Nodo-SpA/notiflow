@@ -306,9 +306,9 @@ images: { unoptimized: true } // Para images estáticas
 
 ### tailwind.config.js (Colores WhatsApp)
 ```javascript
-primary: '#25D366'   // Verde WhatsApp
-secondary: '#075E54' // Verde oscuro
-accent: '#34B7F1'    // Azul
+  primary: '#8EA6A1'   // Tono pastel suave - verde salvia
+  secondary: '#C8B6A6' // Arena cálida y neutra
+  accent: '#EDE3D6'    // Marfil suave
 ```
 
 ---

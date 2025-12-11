@@ -3,10 +3,10 @@
 ## 🎨 Paleta de Colores
 
 ```
-Primary:   #25D366 (Verde WhatsApp)
-Secondary: #075E54 (Verde Oscuro)
-Accent:    #34B7F1 (Azul Claro)
-Light:     #F0F0F0 (Gris Claro)
+Primary:   #8EA6A1 (Tono pastel suave - verde salvia)
+Secondary: #C8B6A6 (Arena cálida y neutra)
+Accent:    #EDE3D6 (Marfil suave)
+Light:     #FBFAF7 (Fondo claro casi blanco)
 Text:      #111111 (Gris Oscuro)
 Border:    #E8E8E8 (Gris Claro)
 Success:   #31A24C
