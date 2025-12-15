@@ -12,4 +12,4 @@ if (fs.existsSync(legacyNext)) {
   console.log('✓ Removed legacy /next folder (using default /_next)');
 } else {
   console.log('✓ Keeping default /_next (no rename needed)');
-b2f396e459c6f115b52338bf907e2f4872155b10b051ad8dbda37e72f4def1e4}
+}

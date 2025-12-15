@@ -32,3 +32,8 @@ app:
   frontend-url: ${APP_FRONTEND_URL:https://hectorguzman.github.io/notiflow}
   mail:
     from: ${APP_MAIL_FROM:no-reply@notiflow.local}
+  whatsapp:
+    token: ${WHATSAPP_TOKEN:}
+    phone-number-id: ${WHATSAPP_PHONE_NUMBER_ID:}
+    waba-id: ${WHATSAPP_WABA_ID:}
+    api-version: ${WHATSAPP_API_VERSION:v20.0}

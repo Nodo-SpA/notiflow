@@ -11,7 +11,7 @@ import com.notiflow.model.MessageDocument;
 import com.notiflow.model.MessageStatus;
 import org.springframework.stereotype.Service;
 
-    import java.time.Instant;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
@@ -21,9 +21,11 @@ import java.util.stream.Collectors;
 public class MessageService {
 
     private final Firestore firestore;
+    private final WhatsAppService whatsAppService;
 
-    public MessageService(Firestore firestore) {
+    public MessageService(Firestore firestore, WhatsAppService whatsAppService) {
         this.firestore = firestore;
+        this.whatsAppService = whatsAppService;
     }
 
     public List<MessageDto> list() {
@@ -61,7 +63,12 @@ public class MessageService {
             msg.setSenderId(senderId);
             msg.setSenderName(senderName);
             msg.setRecipients(request.recipients());
-            msg.setStatus(MessageStatus.SENT);
+            MessageStatus status = MessageStatus.SENT;
+            if (whatsAppService.isEnabled()) {
+                var result = whatsAppService.sendText(request.content(), request.recipients());
+                status = result.allSucceeded() ? MessageStatus.SENT : MessageStatus.FAILED;
+            }
+            msg.setStatus(status);
             msg.setCreatedAt(Instant.now());
 
             DocumentReference ref = firestore.collection("messages").document(msg.getId());

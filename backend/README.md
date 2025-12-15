@@ -29,6 +29,11 @@ mvn -Dmaven.repo.local=./.m2 -Dmaven.test.skip=true spring-boot:run
 - `APP_MAIL_FROM` remitente de correos (ej: `no-reply@notiflow.app`)
 - `SENDGRID_API_KEY` API key para enviar el mail de recuperación. Si no está, el endpoint devuelve el token en la respuesta (solo para pruebas).
 - `APP_PASSWORD_RESET_EXPIRES_MINUTES` minutos de vigencia del token (default 30)
+- WhatsApp Cloud API:
+  - `WHATSAPP_TOKEN` (access token)
+  - `WHATSAPP_PHONE_NUMBER_ID` (Phone Number ID asociado a WABA para el endpoint `/messages`)
+  - `WHATSAPP_WABA_ID` (opcional, solo informativo)
+  - `WHATSAPP_API_VERSION` (default `v20.0`)
 
 ## Endpoints principales
 - `POST /auth/login` → `{ token, user }`

@@ -6,14 +6,14 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // Paleta cálida y suave para evitar fatiga visual
-          primary: '#8EA6A1',
-          secondary: '#C8B6A6',
-          accent: '#EDE3D6',
-          light: '#FBFAF7',
+        // Paleta fresca y legible
+        primary: '#0F766E',
+        secondary: '#0B1220',
+        accent: '#EAF3FF',
+        light: '#F7FAFC',
       },
       fontFamily: {
-        sans: ['system-ui', 'sans-serif'],
+        sans: ['"Manrope"', 'system-ui', 'sans-serif'],
       },
     },
   },

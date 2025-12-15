@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import clsx from 'clsx';
@@ -12,47 +12,54 @@ import {
   FiSettings,
   FiChevronDown,
 } from 'react-icons/fi';
-
-const menuItems = [
-  {
-    label: 'Dashboard',
-    href: '/dashboard',
-    icon: FiHome,
-  },
-  {
-    label: 'Enviar Mensaje',
-    href: '/messages/new',
-    icon: FiMessageCircle,
-  },
-  {
-    label: 'Historial de Mensajes',
-    href: '/messages',
-    icon: FiMessageCircle,
-  },
-  {
-    label: 'Gestión',
-    icon: FiUsers,
-    submenu: [
-      { label: 'Estudiantes', href: '/management/students' },
-      { label: 'Cursos', href: '/management/courses' },
-      { label: 'Niveles', href: '/management/levels' },
-    ],
-  },
-  {
-    label: 'Reportes',
-    href: '/reports',
-    icon: FiBarChart2,
-  },
-  {
-    label: 'Configuración',
-    href: '/settings',
-    icon: FiSettings,
-  },
-];
+import { useAuthStore } from '@/store';
 
 export const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const [expandedMenu, setExpandedMenu] = useState<string | null>(null);
+  const user = useAuthStore((state) => state.user);
+  const isAdmin = (user?.role || '').toLowerCase() === 'admin';
+
+  const menuItems = useMemo(
+    () => [
+      {
+        label: 'Dashboard',
+        href: '/dashboard',
+        icon: FiHome,
+      },
+      {
+        label: 'Enviar Mensaje',
+        href: '/messages/new',
+        icon: FiMessageCircle,
+      },
+      {
+        label: 'Historial de Mensajes',
+        href: '/messages',
+        icon: FiMessageCircle,
+      },
+      {
+        label: 'Gestión',
+        icon: FiUsers,
+        submenu: [
+          { label: 'Estudiantes', href: '/management/students' },
+          { label: 'Cursos', href: '/management/courses' },
+          { label: 'Niveles', href: '/management/levels' },
+          ...(isAdmin ? [{ label: 'Grupos', href: '/management/groups' }] : []),
+        ],
+      },
+      {
+        label: 'Reportes',
+        href: '/reports',
+        icon: FiBarChart2,
+      },
+      {
+        label: 'Configuración',
+        href: '/settings',
+        icon: FiSettings,
+      },
+    ],
+    [isAdmin]
+  );
 
   return (
     <aside className="hidden sm:flex sm:flex-col w-64 bg-secondary text-white">

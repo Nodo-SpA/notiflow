@@ -20,14 +20,6 @@ type SchoolItem = {
   name: string;
 };
 
-type GroupItem = {
-  id: string;
-  name: string;
-  description?: string;
-  memberIds: string[];
-  schoolId: string;
-};
-
 export default function SettingsPage() {
   const user = useAuthStore((state) => state.user);
   const isAdmin = (user?.role || '').toLowerCase() === 'admin';
@@ -35,10 +27,8 @@ export default function SettingsPage() {
 
   const [users, setUsers] = useState<UserListItem[]>([]);
   const [schools, setSchools] = useState<SchoolItem[]>([]);
-  const [groups, setGroups] = useState<GroupItem[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [loadingSchools, setLoadingSchools] = useState(false);
-  const [loadingGroups, setLoadingGroups] = useState(false);
   const [error, setError] = useState('');
   const [userForm, setUserForm] = useState({
     name: '',
@@ -52,12 +42,6 @@ export default function SettingsPage() {
     id: '',
     name: '',
   });
-  const [groupForm, setGroupForm] = useState({
-    name: '',
-    description: '',
-    memberIds: [] as string[],
-    schoolId: '',
-  });
   const [csvInfo, setCsvInfo] = useState<{ fileName: string; rows: number }>({
     fileName: '',
     rows: 0,
@@ -67,7 +51,6 @@ export default function SettingsPage() {
   >([]);
   const [savingUser, setSavingUser] = useState(false);
   const [savingSchool, setSavingSchool] = useState(false);
-  const [savingGroup, setSavingGroup] = useState(false);
   const [importingCsv, setImportingCsv] = useState(false);
 
   const availableRoles = useMemo(
@@ -84,7 +67,6 @@ export default function SettingsPage() {
     if (!isAdmin) return;
     loadUsers();
     loadSchools();
-    loadGroups();
   }, [isAdmin]);
 
   useEffect(() => {
@@ -159,66 +141,6 @@ export default function SettingsPage() {
       setError(msg);
     } finally {
       setSavingSchool(false);
-    }
-  };
-
-  const loadGroups = async () => {
-    setLoadingGroups(true);
-    setError('');
-    try {
-      const schoolIdParam = isGlobalAdmin ? groupForm.schoolId || undefined : undefined;
-      const res = await apiClient.getGroups(schoolIdParam);
-      setGroups(res.data || []);
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ||
-        err?.response?.data?.error ||
-        err?.message ||
-        'No se pudo cargar grupos';
-      setError(msg);
-    } finally {
-      setLoadingGroups(false);
-    }
-  };
-
-  const handleCreateGroup = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSavingGroup(true);
-    setError('');
-    try {
-      const schoolId = isGlobalAdmin
-        ? groupForm.schoolId || userForm.schoolId
-        : user?.schoolId || groupForm.schoolId;
-      if (!schoolId) {
-        setError('Selecciona colegio para el grupo');
-        return;
-      }
-      if (!groupForm.memberIds.length) {
-        setError('Selecciona al menos un miembro');
-        return;
-      }
-      await apiClient.createGroup({
-        name: groupForm.name,
-        description: groupForm.description,
-        memberIds: groupForm.memberIds,
-        schoolId,
-      });
-      setGroupForm({
-        name: '',
-        description: '',
-        memberIds: [],
-        schoolId: isGlobalAdmin ? '' : schoolId,
-      });
-      await loadGroups();
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ||
-        err?.response?.data?.error ||
-        err?.message ||
-        'No se pudo crear el grupo';
-      setError(msg);
-    } finally {
-      setSavingGroup(false);
     }
   };
 
@@ -527,118 +449,6 @@ export default function SettingsPage() {
                       )}
                     </tbody>
                   </table>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {isAdmin && (
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Grupos</h2>
-                  <p className="text-sm text-gray-600">Crea grupos de usuarios para enviar mensajes</p>
-                </div>
-                {loadingGroups && <span className="text-sm text-gray-500">Cargando...</span>}
-              </div>
-              <form className="grid grid-cols-1 md:grid-cols-2 gap-4" onSubmit={handleCreateGroup}>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del grupo</label>
-                  <input
-                    type="text"
-                    value={groupForm.name}
-                    onChange={(e) => setGroupForm((prev) => ({ ...prev, name: e.target.value }))}
-                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Descripción</label>
-                  <input
-                    type="text"
-                    value={groupForm.description}
-                    onChange={(e) =>
-                      setGroupForm((prev) => ({ ...prev, description: e.target.value }))
-                    }
-                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                    placeholder="Opcional"
-                  />
-                </div>
-                {isGlobalAdmin && (
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Colegio</label>
-                    <select
-                      value={groupForm.schoolId}
-                      onChange={(e) => setGroupForm((prev) => ({ ...prev, schoolId: e.target.value }))}
-                      className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 bg-white"
-                    >
-                      <option value="">Selecciona colegio</option>
-                      {schools.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name} ({s.id})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Miembros</label>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 max-h-64 overflow-y-auto border border-gray-200 rounded-lg p-2">
-                    {users.map((u) => (
-                      <label key={u.id} className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={groupForm.memberIds.includes(u.id)}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            setGroupForm((prev) => {
-                              const next = new Set(prev.memberIds);
-                              if (checked) next.add(u.id);
-                              else next.delete(u.id);
-                              return { ...prev, memberIds: Array.from(next) };
-                            });
-                          }}
-                        />
-                        <span className="text-gray-800">{u.name}</span>
-                        <span className="text-gray-500 text-xs">({u.role})</span>
-                      </label>
-                    ))}
-                    {!users.length && (
-                      <p className="text-sm text-gray-500">No hay usuarios para seleccionar.</p>
-                    )}
-                  </div>
-                </div>
-                <div className="md:col-span-2 flex justify-end">
-                  <button
-                    type="submit"
-                    disabled={savingGroup}
-                    className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-green-700 transition-colors disabled:opacity-60"
-                  >
-                    {savingGroup ? 'Guardando...' : 'Crear grupo'}
-                  </button>
-                </div>
-              </form>
-
-              <div className="border-t border-gray-200 pt-4">
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">Grupos creados</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {groups.map((g) => (
-                    <div
-                      key={g.id}
-                      className="border border-gray-200 rounded-lg p-3 hover:shadow-sm transition-shadow"
-                    >
-                      <p className="text-sm font-semibold text-gray-900">{g.name}</p>
-                      {g.description && (
-                        <p className="text-xs text-gray-600 mb-1">{g.description}</p>
-                      )}
-                      <p className="text-xs text-gray-600">
-                        Miembros: {g.memberIds?.length || 0} • Colegio: {g.schoolId}
-                      </p>
-                    </div>
-                  ))}
-                  {!groups.length && (
-                    <div className="text-sm text-gray-500">No hay grupos registrados.</div>
-                  )}
                 </div>
               </div>
             </div>
