@@ -54,7 +54,7 @@ export default function EventsPage() {
   const [description, setDescription] = useState('');
   const [startDateTime, setStartDateTime] = useState('');
   const [endDateTime, setEndDateTime] = useState('');
-  const [eventType, setEventType] = useState<'general' | 'schedule'>('general');
+  const [eventType, setEventType] = useState<'colegio' | 'evaluacion' | 'reunion'>('colegio');
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
 
@@ -138,7 +138,10 @@ export default function EventsPage() {
           !term ||
           ev.title?.toLowerCase().includes(term) ||
           ev.description?.toLowerCase().includes(term);
-        const matchesType = filterType === 'all' || ev.type === filterType;
+        const rawType = ev.type || '';
+        const normalizedType =
+          rawType === 'general' ? 'colegio' : rawType === 'schedule' ? 'evaluacion' : rawType;
+        const matchesType = filterType === 'all' || normalizedType === filterType;
         return matchesTerm && matchesType;
       })
       .sort((a, b) => {
@@ -244,16 +247,17 @@ export default function EventsPage() {
     if (end) end.setDate(end.getDate() + 7);
     setStartDateTime(start.toISOString().slice(0, 16));
     setEndDateTime(end ? end.toISOString().slice(0, 16) : '');
-    setEventType((ev.type as 'general' | 'schedule') || 'general');
+    setEventType((ev.type as any) || 'colegio');
     setSelectedGroupIds(ev.audience?.groupIds || []);
     setSelectedUserIds(ev.audience?.userIds || []);
     setShowModal(true);
   };
 
-  const typePill = (type?: string) =>
-    type === 'schedule'
-      ? { label: 'Horario', color: 'bg-purple-100 text-purple-800' }
-      : { label: 'Evento', color: 'bg-blue-100 text-blue-800' };
+  const typePill = (type?: string) => {
+    if (type === 'evaluacion' || type === 'schedule') return { label: 'Evaluación', color: 'bg-purple-100 text-purple-800' };
+    if (type === 'reunion') return { label: 'Reunión apoderados', color: 'bg-amber-100 text-amber-800' };
+    return { label: 'Evento colegio', color: 'bg-blue-100 text-blue-800' };
+  };
 
   const monthName = new Intl.DateTimeFormat('es', { month: 'long', year: 'numeric' }).format(monthCursor);
   const daysMatrix = useMemo(() => {
@@ -413,35 +417,13 @@ export default function EventsPage() {
                 Eventos del {selectedDay.toLocaleDateString()}
                 {eventsSelectedDay.length ? ` (${eventsSelectedDay.length})` : ''}
               </div>
-              {canCreate && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    // pre-cargar fecha de inicio en el formulario
-                    const iso = new Date(
-                      selectedDay.getFullYear(),
-                      selectedDay.getMonth(),
-                      selectedDay.getDate(),
-                      8,
-                      0
-                    )
-                      .toISOString()
-                      .slice(0, 16);
-                    setStartDateTime(iso);
-                    setShowModal(true);
-                  }}
-                >
-                  <FiPlus size={16} />
-                  Agregar en esta fecha
-                </Button>
-              )}
             </div>
           )}
         </Card>
 
         <Card className="p-4 flex flex-col gap-3 shadow-sm">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="flex items-center gap-2 border rounded-lg px-3 py-2 bg-white">
+            <div className="flex items-center gap-2 border rounded-lg px-3 py-2 bg-white w-full sm:w-96">
               <FiSearch className="text-gray-500" />
               <input
                 value={search}
@@ -456,8 +438,9 @@ export default function EventsPage() {
               onChange={(val) => setFilterType(val as string)}
               options={[
                 { value: 'all', label: 'Todos' },
-                { value: 'general', label: 'Eventos' },
-                { value: 'schedule', label: 'Horarios' },
+                { value: 'colegio', label: 'Evento del colegio' },
+                { value: 'evaluacion', label: 'Evaluación' },
+                { value: 'reunion', label: 'Reunión de apoderados' },
               ]}
             />
             <div className="text-sm text-gray-600 flex items-center">
@@ -582,10 +565,11 @@ export default function EventsPage() {
             <Select
               label="Tipo"
               value={eventType}
-              onChange={(val) => setEventType(val as 'general' | 'schedule')}
+              onChange={(val) => setEventType(val as 'colegio' | 'evaluacion' | 'reunion')}
               options={[
-                { value: 'general', label: 'Evento general' },
-                { value: 'schedule', label: 'Horario escolar' },
+                { value: 'colegio', label: 'Evento del colegio' },
+                { value: 'evaluacion', label: 'Evaluación' },
+                { value: 'reunion', label: 'Reunión de apoderados' },
               ]}
             />
 

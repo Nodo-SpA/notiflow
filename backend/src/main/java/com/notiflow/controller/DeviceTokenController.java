@@ -20,7 +20,7 @@ public class DeviceTokenController {
     public ResponseEntity<Void> register(@Valid @RequestBody DeviceRegisterRequest req) {
         CurrentUser user = CurrentUser.fromContext()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.UNAUTHORIZED));
-        deviceTokenService.register(user.email(), req.token(), req.platform());
+        deviceTokenService.register(user.email(), req.token(), req.platform(), user.schoolId());
         return ResponseEntity.ok().build();
     }
 

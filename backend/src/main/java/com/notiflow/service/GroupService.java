@@ -34,7 +34,7 @@ public class GroupService {
     public List<String> findGroupsForMember(String email, String schoolId) {
         if (email == null || email.isBlank()) return List.of();
         try {
-            var query = firestore.collection("groups")
+            var query = firestore.collectionGroup("groups")
                     .whereEqualTo("schoolId", schoolId)
                     .whereArrayContains("memberIds", email);
             ApiFuture<QuerySnapshot> future = query.limit(50).get();
@@ -45,7 +45,7 @@ public class GroupService {
     }
 
     public GroupListResponse listBySchool(String schoolId, String year, String query, int page, int pageSize) {
-        var baseCollection = firestore.collection("groups").whereEqualTo("schoolId", schoolId);
+        var baseCollection = tenantGroups(schoolId);
         var filtered = (year != null && !year.isBlank())
                 ? baseCollection.whereEqualTo("year", year)
                 : baseCollection;
@@ -53,7 +53,7 @@ public class GroupService {
     }
 
     public GroupListResponse listAll(String year, String query, int page, int pageSize) {
-        var baseCollection = firestore.collection("groups");
+        var baseCollection = firestore.collectionGroup("groups");
         var filtered = (year != null && !year.isBlank())
                 ? baseCollection.whereEqualTo("year", year)
                 : baseCollection;
@@ -155,6 +155,11 @@ public class GroupService {
         return snapshot.getCount();
     }
 
+    private com.google.cloud.firestore.CollectionReference tenantGroups(String tenantId) {
+        String safeTenant = tenantId == null || tenantId.isBlank() ? "global" : tenantId;
+        return firestore.collection("tenants").document(safeTenant).collection("groups");
+    }
+
     public GroupDto create(GroupRequest request, String schoolId) {
         try {
             GroupDocument g = new GroupDocument();
@@ -168,7 +173,7 @@ public class GroupService {
                     : String.valueOf(java.time.Year.now().getValue()));
             g.setCreatedAt(Instant.now());
 
-            DocumentReference ref = firestore.collection("groups").document(g.getId());
+            DocumentReference ref = tenantGroups(schoolId).document(g.getId());
             ref.set(g).get();
 
             return new GroupDto(g.getId(), g.getName(), g.getDescription(), g.getMemberIds(), g.getSchoolId(), g.getYear(), g.getCreatedAt());
@@ -180,8 +185,23 @@ public class GroupService {
 
     public GroupDto update(String id, GroupRequest request, String schoolId, boolean isGlobalAdmin) {
         try {
-            DocumentReference ref = firestore.collection("groups").document(id);
+            DocumentReference ref = tenantGroups(schoolId).document(id);
             var snap = ref.get().get();
+            if (!snap.exists()) {
+                QueryDocumentSnapshot cg = firestore.collectionGroup("groups")
+                        .whereEqualTo("id", id)
+                        .limit(1)
+                        .get()
+                        .get()
+                        .getDocuments()
+                        .stream()
+                        .findFirst()
+                        .orElse(null);
+                if (cg != null) {
+                    ref = cg.getReference();
+                    snap = cg;
+                }
+            }
             if (!snap.exists()) {
                 throw new IllegalArgumentException("Grupo no encontrado");
             }
@@ -189,21 +209,30 @@ public class GroupService {
             if (existing == null) {
                 throw new IllegalArgumentException("Grupo inválido");
             }
-            if (!isGlobalAdmin && existing.getSchoolId() != null && !existing.getSchoolId().equalsIgnoreCase(schoolId)) {
+            String originalSchoolId = existing.getSchoolId();
+            if (!isGlobalAdmin && originalSchoolId != null && !originalSchoolId.equalsIgnoreCase(schoolId)) {
                 throw new IllegalArgumentException("No puedes editar grupos de otro colegio");
+            }
+
+            String targetSchoolId = originalSchoolId;
+            if (isGlobalAdmin && request.schoolId() != null && !request.schoolId().isBlank()) {
+                targetSchoolId = request.schoolId();
             }
 
             existing.setName(request.name());
             existing.setDescription(request.description());
             existing.setMemberIds(request.memberIds());
-            existing.setSchoolId(isGlobalAdmin && request.schoolId() != null && !request.schoolId().isBlank()
-                    ? request.schoolId()
-                    : existing.getSchoolId());
+            existing.setSchoolId(targetSchoolId);
             existing.setYear(request.year() != null && !request.year().isBlank()
                     ? request.year()
                     : existing.getYear());
 
-            ref.set(existing).get();
+            if (originalSchoolId != null && !originalSchoolId.equalsIgnoreCase(targetSchoolId)) {
+                tenantGroups(targetSchoolId).document(id).set(existing).get();
+                ref.delete().get();
+            } else {
+                ref.set(existing).get();
+            }
             return new GroupDto(existing.getId(), existing.getName(), existing.getDescription(), existing.getMemberIds(), existing.getSchoolId(), existing.getYear(), existing.getCreatedAt());
         } catch (InterruptedException | ExecutionException e) {
             Thread.currentThread().interrupt();
@@ -213,9 +242,26 @@ public class GroupService {
 
     public void delete(String id, String schoolId, boolean isGlobalAdmin) {
         try {
-            DocumentReference ref = firestore.collection("groups").document(id);
+            DocumentReference ref = tenantGroups(schoolId).document(id);
             var snap = ref.get().get();
             if (!snap.exists()) {
+                // fallback: collectionGroup por si el grupo está en otro tenant o legacy
+                QueryDocumentSnapshot cg = firestore.collectionGroup("groups")
+                        .whereEqualTo("id", id)
+                        .whereEqualTo("schoolId", schoolId)
+                        .limit(1)
+                        .get()
+                        .get()
+                        .getDocuments()
+                        .stream()
+                        .findFirst()
+                        .orElse(null);
+                if (cg != null) {
+                    ref = cg.getReference();
+                    snap = cg;
+                }
+            }
+            if (snap == null || !snap.exists()) {
                 throw new IllegalArgumentException("Grupo no encontrado");
             }
             GroupDocument existing = snap.toObject(GroupDocument.class);

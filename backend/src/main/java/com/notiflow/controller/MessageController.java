@@ -48,7 +48,8 @@ public class MessageController {
         if (self) {
             senderFilter = user.email();
         }
-        return ResponseEntity.ok(messageService.list(year, senderFilter, query, page, pageSize));
+        boolean isGlobal = user.isGlobalAdmin() || user.isSuperAdmin();
+        return ResponseEntity.ok(messageService.list(user.schoolId(), isGlobal, year, senderFilter, query, page, pageSize));
     }
 
     @PostMapping

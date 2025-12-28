@@ -231,7 +231,7 @@ export default function NewMessagePage() {
     const studentEmails = selectedStudentIds
       .map((id) => studentCache[id]?.email)
       .filter((e): e is string => Boolean(e));
-    const emails = Array.from(new Set([...userEmails, ...studentEmails]));
+    const emails: string[] = Array.from(new Set<string>([...userEmails, ...studentEmails]));
     if (!emails.length) {
       setSendError('Selecciona al menos un usuario con correo.');
       return;
@@ -362,7 +362,11 @@ export default function NewMessagePage() {
       return;
     }
     if (step === 3) {
-      if (!selectedUserIds.length) {
+      const hasRecipients =
+        selectedUserIds.length > 0 ||
+        selectedStudentIds.length > 0 ||
+        selectedGroups.length > 0;
+      if (!hasRecipients) {
         setSendError('Selecciona al menos un destinatario.');
         return;
       }
@@ -1007,92 +1011,6 @@ export default function NewMessagePage() {
                 <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm space-y-3">
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                     <div className="w-full">
-                      <p className="text-xs uppercase tracking-wide text-gray-500">Usuarios</p>
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                        <input
-                          type="search"
-                          value={search}
-                          onChange={(e) => setSearch(e.target.value)}
-                          placeholder="Buscar por nombre o email"
-                          className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                        />
-                        <button
-                          type="button"
-                          onClick={toggleSelectFiltered}
-                          className="px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-800 font-semibold hover:border-primary hover:text-primary transition-colors shadow-sm"
-                        >
-                          {paginatedUsers.length &&
-                          paginatedUsers.every((u) => selectedUserIds.includes(u.id))
-                            ? 'Deseleccionar visibles'
-                            : 'Seleccionar visibles'}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="text-xs text-gray-500 flex flex-col items-start sm:items-end">
-                      <span>{filteredUsers.length} resultado(s)</span>
-                      <span>Mostrando página {userPage} de {userTotalPages}</span>
-                    </div>
-                  </div>
-
-                  {loadingUsers && <p className="text-sm text-gray-500">Cargando usuarios...</p>}
-                  {usersError && <p className="text-sm text-red-600">{usersError}</p>}
-                  {!loadingUsers && !usersError && (
-                    <>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-72 overflow-auto pr-1">
-                        {paginatedUsers.map((u) => (
-                          <label
-                            key={u.id}
-                            className={`flex items-center gap-2 text-sm text-gray-700 border rounded-lg px-3 py-2 cursor-pointer transition ${
-                              selectedUserIds.includes(u.id)
-                                ? 'border-primary bg-primary/10'
-                                : 'border-gray-200 hover:border-primary'
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              className="text-primary"
-                              checked={selectedUserIds.includes(u.id)}
-                              onChange={() => toggleUser(u.id)}
-                            />
-                            <div className="flex-1 min-w-0">
-                              <p className="font-medium text-gray-900 truncate">{u.name}</p>
-                              <p className="text-xs text-gray-500 truncate">{u.email}</p>
-                            </div>
-                          </label>
-                        ))}
-                        {!users.length && (
-                          <p className="text-sm text-gray-500 col-span-2">No hay usuarios disponibles.</p>
-                        )}
-                        {users.length > 0 && !filteredUsers.length && (
-                          <p className="text-sm text-gray-500 col-span-2">Sin coincidencias para la búsqueda.</p>
-                        )}
-                      </div>
-                      <div className="flex items-center justify-between gap-3 text-sm text-gray-600">
-                        <button
-                          type="button"
-                          disabled={userPage <= 1}
-                          onClick={() => setUserPage((p) => Math.max(1, p - 1))}
-                          className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-50"
-                        >
-                          Anterior
-                        </button>
-                        <span>Página {userPage} de {userTotalPages}</span>
-                        <button
-                          type="button"
-                          disabled={userPage >= userTotalPages}
-                          onClick={() => setUserPage((p) => Math.min(userTotalPages, p + 1))}
-                          className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-50"
-                        >
-                          Siguiente
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm space-y-3">
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                    <div className="w-full">
                       <p className="text-xs uppercase tracking-wide text-gray-500">Estudiantes</p>
                       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                         <input
@@ -1171,6 +1089,92 @@ export default function NewMessagePage() {
                           type="button"
                           disabled={studentPage >= studentTotalPages}
                           onClick={() => setStudentPage((p) => Math.min(studentTotalPages, p + 1))}
+                          className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-50"
+                        >
+                          Siguiente
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm space-y-3">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                    <div className="w-full">
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Usuarios</p>
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <input
+                          type="search"
+                          value={search}
+                          onChange={(e) => setSearch(e.target.value)}
+                          placeholder="Buscar por nombre o email"
+                          className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                        />
+                        <button
+                          type="button"
+                          onClick={toggleSelectFiltered}
+                          className="px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-800 font-semibold hover:border-primary hover:text-primary transition-colors shadow-sm"
+                        >
+                          {paginatedUsers.length &&
+                          paginatedUsers.every((u) => selectedUserIds.includes(u.id))
+                            ? 'Deseleccionar visibles'
+                            : 'Seleccionar visibles'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-500 flex flex-col items-start sm:items-end">
+                      <span>{filteredUsers.length} resultado(s)</span>
+                      <span>Mostrando página {userPage} de {userTotalPages}</span>
+                    </div>
+                  </div>
+
+                  {loadingUsers && <p className="text-sm text-gray-500">Cargando usuarios...</p>}
+                  {usersError && <p className="text-sm text-red-600">{usersError}</p>}
+                  {!loadingUsers && !usersError && (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-72 overflow-auto pr-1">
+                        {paginatedUsers.map((u) => (
+                          <label
+                            key={u.id}
+                            className={`flex items-center gap-2 text-sm text-gray-700 border rounded-lg px-3 py-2 cursor-pointer transition ${
+                              selectedUserIds.includes(u.id)
+                                ? 'border-primary bg-primary/10'
+                                : 'border-gray-200 hover:border-primary'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="text-primary"
+                              checked={selectedUserIds.includes(u.id)}
+                              onChange={() => toggleUser(u.id)}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-gray-900 truncate">{u.name}</p>
+                              <p className="text-xs text-gray-500 truncate">{u.email}</p>
+                            </div>
+                          </label>
+                        ))}
+                        {!users.length && (
+                          <p className="text-sm text-gray-500 col-span-2">No hay usuarios disponibles.</p>
+                        )}
+                        {users.length > 0 && !filteredUsers.length && (
+                          <p className="text-sm text-gray-500 col-span-2">Sin coincidencias para la búsqueda.</p>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between gap-3 text-sm text-gray-600">
+                        <button
+                          type="button"
+                          disabled={userPage <= 1}
+                          onClick={() => setUserPage((p) => Math.max(1, p - 1))}
+                          className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-50"
+                        >
+                          Anterior
+                        </button>
+                        <span>Página {userPage} de {userTotalPages}</span>
+                        <button
+                          type="button"
+                          disabled={userPage >= userTotalPages}
+                          onClick={() => setUserPage((p) => Math.min(userTotalPages, p + 1))}
                           className="px-3 py-1.5 border border-gray-300 rounded-lg disabled:opacity-50"
                         >
                           Siguiente

@@ -10,13 +10,15 @@
     "export": "next build && node scripts/rename-next.js",
     "start": "next start",
     "lint": "next lint",
-    "deploy": "npm run build:gh && gh-pages -d out"
+    "deploy": "npm run build:gh && gh-pages -d out",
+    "migrate:firestore": "node scripts/firestore-tenant-migrate.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
     "clsx": "^2.0.0",
     "date-fns": "^2.30.0",
     "dayjs": "^1.11.13",
+    "firebase-admin": "^12.0.0",
     "mvn": "^3.5.0",
     "next": "^14.0.0",
     "react": "^18.2.0",

@@ -1,10 +1,7 @@
 package com.notiflow.model;
 
-import com.google.cloud.firestore.annotation.DocumentId;
-
 public class UserDocument {
 
-    @DocumentId
     private String id;
     private String name;
     private String email;

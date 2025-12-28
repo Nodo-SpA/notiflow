@@ -13,6 +13,7 @@ export const Button: React.FC<ButtonProps> = ({
   disabled = false,
   onClick,
   type = 'button',
+  className,
 }) => {
   const baseStyles =
     'font-medium rounded-lg transition-all duration-200 flex items-center justify-center gap-2';
@@ -22,6 +23,7 @@ export const Button: React.FC<ButtonProps> = ({
     secondary: 'bg-secondary text-white hover:bg-secondary/90 disabled:bg-gray-400',
     outline: 'border-2 border-primary text-primary hover:bg-primary/10 disabled:border-gray-400',
     danger: 'bg-red-600 text-white hover:bg-red-700 disabled:bg-gray-400',
+    ghost: 'text-primary hover:bg-primary/10 disabled:text-gray-400',
   };
 
   const sizeStyles = {
@@ -40,7 +42,8 @@ export const Button: React.FC<ButtonProps> = ({
         variantStyles[variant],
         sizeStyles[size],
         fullWidth && 'w-full',
-        (disabled || loading) && 'cursor-not-allowed opacity-60'
+        (disabled || loading) && 'cursor-not-allowed opacity-60',
+        className
       )}
     >
       {loading && (

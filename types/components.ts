@@ -2,13 +2,14 @@ import { ReactNode } from 'react';
 
 export interface ButtonProps {
   children: ReactNode;
-  variant?: 'primary' | 'secondary' | 'outline' | 'danger';
+  variant?: 'primary' | 'secondary' | 'outline' | 'danger' | 'ghost';
   size?: 'sm' | 'md' | 'lg';
   fullWidth?: boolean;
   loading?: boolean;
   disabled?: boolean;
   onClick?: () => void;
   type?: 'button' | 'submit' | 'reset';
+  className?: string;
 }
 
 export interface InputProps {

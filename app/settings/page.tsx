@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { apiClient } from '@/lib/api-client';
 import { useAuthStore } from '@/store';
-import { FiEye, FiEyeOff } from 'react-icons/fi';
+import { FiEye, FiEyeOff, FiUsers, FiDatabase, FiCpu, FiUpload, FiHome, FiChevronRight } from 'react-icons/fi';
 import { Modal } from '@/components/ui';
 
 type UserListItem = {
@@ -60,7 +60,6 @@ export default function SettingsPage() {
     logoUrl: '',
   });
   const [editingSchool, setEditingSchool] = useState<SchoolItem | null>(null);
-  const [showEditSchool, setShowEditSchool] = useState(false);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [showUserPassword, setShowUserPassword] = useState(false);
   const [csvInfo, setCsvInfo] = useState<{ fileName: string; rows: number }>({
@@ -94,6 +93,21 @@ export default function SettingsPage() {
   const [loadingAi, setLoadingAi] = useState(false);
   const [savingAi, setSavingAi] = useState(false);
   const [importingStudents, setImportingStudents] = useState(false);
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [showSchoolModal, setShowSchoolModal] = useState(false);
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [showImportUsersModal, setShowImportUsersModal] = useState(false);
+  const [showImportStudentsModal, setShowImportStudentsModal] = useState(false);
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [showSchoolModal, setShowSchoolModal] = useState(false);
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [showImportUsersModal, setShowImportUsersModal] = useState(false);
+  const [showImportStudentsModal, setShowImportStudentsModal] = useState(false);
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [showSchoolModal, setShowSchoolModal] = useState(false);
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [showImportUsersModal, setShowImportUsersModal] = useState(false);
+  const [showImportStudentsModal, setShowImportStudentsModal] = useState(false);
   const defaultRewritePrompt = `Mejora la redacción del siguiente mensaje manteniendo el significado.
 Adáptalo a un tono {tone}, claro y respetuoso. Devuelve solo el texto mejorado sin marcas adicionales.
 Mensaje original:

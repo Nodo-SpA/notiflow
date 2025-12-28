@@ -29,7 +29,7 @@ public class TemplateController {
         CurrentUser user = CurrentUser.fromContext()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
         accessControlService.check(user, "messages.create", user.schoolId(), java.util.Optional.empty());
-        return ResponseEntity.ok(templateService.listByOwner(user.email()));
+        return ResponseEntity.ok(templateService.listByOwner(user.email(), user.schoolId()));
     }
 
     @PostMapping
@@ -37,7 +37,7 @@ public class TemplateController {
         CurrentUser user = CurrentUser.fromContext()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
         accessControlService.check(user, "messages.create", user.schoolId(), java.util.Optional.empty());
-        return ResponseEntity.ok(templateService.create(request, user.email()));
+        return ResponseEntity.ok(templateService.create(request, user.email(), user.schoolId()));
     }
 
     @PutMapping("/{id}")
@@ -45,7 +45,7 @@ public class TemplateController {
         CurrentUser user = CurrentUser.fromContext()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
         accessControlService.check(user, "messages.create", user.schoolId(), java.util.Optional.empty());
-        return ResponseEntity.ok(templateService.update(id, request, user.email()));
+        return ResponseEntity.ok(templateService.update(id, request, user.email(), user.schoolId()));
     }
 
     @DeleteMapping("/{id}")
@@ -53,7 +53,7 @@ public class TemplateController {
         CurrentUser user = CurrentUser.fromContext()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
         accessControlService.check(user, "messages.create", user.schoolId(), java.util.Optional.empty());
-        templateService.delete(id, user.email());
+        templateService.delete(id, user.email(), user.schoolId());
         return ResponseEntity.noContent().build();
     }
 }

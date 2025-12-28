@@ -38,8 +38,9 @@ public class UserService {
     public Optional<UserDocument> findByEmail(String email) {
         try {
             String normalizedEmail = email.toLowerCase();
-            ApiFuture<QuerySnapshot> query = firestore.collection("users")
+            ApiFuture<QuerySnapshot> query = firestore.collectionGroup("users")
                     .whereEqualTo("email", normalizedEmail)
+                    .orderBy("email")
                     .limit(1)
                     .get();
             List<QueryDocumentSnapshot> docs = query.get().getDocuments();
@@ -59,7 +60,8 @@ public class UserService {
         try {
             String docId = user.getId() != null ? user.getId() : UUID.randomUUID().toString();
             user.setId(docId);
-            DocumentReference ref = firestore.collection("users").document(docId);
+            String tenant = user.getSchoolId() == null || user.getSchoolId().isBlank() ? "global" : user.getSchoolId();
+            DocumentReference ref = tenantUsers(tenant).document(docId);
             ref.set(user).get();
             return user;
         } catch (InterruptedException | ExecutionException e) {
@@ -70,7 +72,18 @@ public class UserService {
 
     public void deleteById(String id) {
         try {
-            firestore.collection("users").document(id).delete().get();
+            QueryDocumentSnapshot snap = firestore.collectionGroup("users")
+                    .whereEqualTo("id", id)
+                    .limit(1)
+                    .get()
+                    .get()
+                    .getDocuments()
+                    .stream()
+                    .findFirst()
+                    .orElse(null);
+            if (snap != null) {
+                snap.getReference().delete().get();
+            }
         } catch (InterruptedException | ExecutionException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Error eliminando usuario", e);
@@ -81,8 +94,14 @@ public class UserService {
         try {
             int safePage = Math.max(1, page);
             int safeSize = Math.min(Math.max(1, pageSize), 100);
-            com.google.cloud.firestore.Query queryRef = firestore.collection("users");
-            if (!isGlobal && schoolId != null && !schoolId.isBlank()) {
+            com.google.cloud.firestore.Query queryRef;
+            if (isGlobal && (schoolId == null || schoolId.isBlank())) {
+                queryRef = firestore.collectionGroup("users");
+            } else {
+                String target = schoolId == null || schoolId.isBlank() ? "global" : schoolId;
+                queryRef = tenantUsers(target);
+            }
+            if (schoolId != null && !schoolId.isBlank()) {
                 queryRef = queryRef.whereEqualTo("schoolId", schoolId);
             }
             ApiFuture<QuerySnapshot> query = queryRef
@@ -139,5 +158,10 @@ public class UserService {
                 saved.getSchoolName(),
                 saved.getRut()
         );
+    }
+
+    private com.google.cloud.firestore.CollectionReference tenantUsers(String tenantId) {
+        String safeTenant = tenantId == null || tenantId.isBlank() ? "global" : tenantId;
+        return firestore.collection("tenants").document(safeTenant).collection("users");
     }
 }

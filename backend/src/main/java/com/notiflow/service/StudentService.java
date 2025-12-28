@@ -55,7 +55,7 @@ public class StudentService {
             }
             s.setId(id);
 
-            var ref = firestore.collection("students").document(id);
+            var ref = tenantStudents(schoolId).document(id);
             var snap = ref.get().get();
             if (snap.exists()) {
                 StudentDocument existing = snap.toObject(StudentDocument.class);
@@ -72,7 +72,7 @@ public class StudentService {
     }
 
     public StudentListResponse list(String schoolId, String year, String query, int page, int size) {
-        Query q = firestore.collection("students").whereEqualTo("schoolId", schoolId);
+        Query q = tenantStudents(schoolId);
         if (year != null && !year.isBlank()) {
             q = q.whereEqualTo("year", year);
         }
@@ -80,7 +80,7 @@ public class StudentService {
     }
 
     public StudentListResponse listAll(String year, String query, int page, int size) {
-        Query q = firestore.collection("students");
+        Query q = firestore.collectionGroup("students");
         if (year != null && !year.isBlank()) {
             q = q.whereEqualTo("year", year);
         }
@@ -89,12 +89,20 @@ public class StudentService {
 
     public StudentDto update(String id, StudentRequest request, String requesterSchoolId, boolean isGlobalAdmin) {
         try {
-            var ref = firestore.collection("students").document(id);
-            var snap = ref.get().get();
-            if (!snap.exists()) {
+            var currentRef = firestore.collectionGroup("students")
+                    .whereEqualTo("id", id)
+                    .limit(1)
+                    .get()
+                    .get()
+                    .getDocuments()
+                    .stream()
+                    .findFirst()
+                    .map(QueryDocumentSnapshot::getReference)
+                    .orElse(null);
+            if (currentRef == null) {
                 throw new IllegalArgumentException("Estudiante no encontrado");
             }
-            StudentDocument existing = snap.toObject(StudentDocument.class);
+            StudentDocument existing = currentRef.get().get().toObject(StudentDocument.class);
             if (existing == null) {
                 throw new IllegalArgumentException("Estudiante inválido");
             }
@@ -126,7 +134,13 @@ public class StudentService {
             s.setCreatedAt(existing.getCreatedAt() != null ? existing.getCreatedAt() : Instant.now());
             s.setUpdatedAt(Instant.now());
 
-            ref.set(s).get();
+            // Si cambia de tenant, mover el documento
+            if (existing.getSchoolId() != null && !existing.getSchoolId().equalsIgnoreCase(targetSchoolId)) {
+                tenantStudents(targetSchoolId).document(s.getId()).set(s).get();
+                currentRef.delete().get();
+            } else {
+                tenantStudents(targetSchoolId).document(s.getId()).set(s).get();
+            }
             return toDto(s);
         } catch (InterruptedException | ExecutionException e) {
             Thread.currentThread().interrupt();
@@ -234,6 +248,11 @@ public class StudentService {
         AggregateQuery countQuery = q.count();
         AggregateQuerySnapshot snapshot = countQuery.get().get();
         return snapshot.getCount();
+    }
+
+    private com.google.cloud.firestore.CollectionReference tenantStudents(String tenantId) {
+        String safeTenant = tenantId == null || tenantId.isBlank() ? "global" : tenantId;
+        return firestore.collection("tenants").document(safeTenant).collection("students");
     }
 
     private String defaultValue(String value, String fallback) {

@@ -134,6 +134,7 @@ export default function ReportsPage() {
     });
     return base;
   })();
+  const appSent = appStatusCounts.sent;
 
   if (!canView) {
     return (
@@ -175,8 +176,9 @@ export default function ReportsPage() {
           <StatCard title="Mensajes (año)" value={loading ? '—' : total} />
           <StatCard title="Email enviados" value={loading ? '—' : sentEmail} />
           <StatCard title="Email fallidos" value={loading ? '—' : failedEmail} />
+          <StatCard title="App enviados" value={loading ? '—' : appSent} />
           <StatCard title="App leídos" value={loading ? '—' : appRead} />
-          <StatCard title="Usuarios con email" value={loading ? '—' : usersWithEmail} />
+          <StatCard title="Usuarios con email registrado" value={loading ? '—' : usersWithEmail} />
           <StatCard title="Usuarios activos app" value={loading ? '—' : appActiveUsers} />
         </div>
 

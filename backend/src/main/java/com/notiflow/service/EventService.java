@@ -36,7 +36,7 @@ public class EventService {
     public List<EventDto> listForUser(CurrentUser user, String fromIso, String toIso, String type, int page, int pageSize) {
         int safePage = Math.max(1, page);
         int safeSize = Math.min(Math.max(1, pageSize), 200);
-        Query query = firestore.collection("events");
+        Query query = firestore.collectionGroup("events");
 
         // scope por colegio, salvo superadmin (schoolId global)
         if (user.schoolId() != null && !"global".equalsIgnoreCase(user.schoolId())) {
@@ -162,7 +162,7 @@ public class EventService {
         }
 
         try {
-            DocumentReference ref = firestore.collection("events").document(ev.getId());
+            DocumentReference ref = tenantEvents(schoolId).document(ev.getId());
             ref.set(ev).get();
             return toDto(ev);
         } catch (InterruptedException | ExecutionException e) {
@@ -204,5 +204,10 @@ public class EventService {
                 ev.getAudienceUserIds(),
                 ev.getAudienceGroupIds()
         );
+    }
+
+    private com.google.cloud.firestore.CollectionReference tenantEvents(String tenantId) {
+        String safeTenant = tenantId == null || tenantId.isBlank() ? "global" : tenantId;
+        return firestore.collection("tenants").document(safeTenant).collection("events");
     }
 }

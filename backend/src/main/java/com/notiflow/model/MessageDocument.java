@@ -1,14 +1,11 @@
 package com.notiflow.model;
 
-import com.google.cloud.firestore.annotation.DocumentId;
-
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
 public class MessageDocument {
 
-    @DocumentId
     private String id;
     private String content;
     private String senderId;

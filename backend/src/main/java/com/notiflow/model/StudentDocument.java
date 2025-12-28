@@ -1,11 +1,8 @@
 package com.notiflow.model;
 
-import com.google.cloud.firestore.annotation.DocumentId;
-
 import java.time.Instant;
 
 public class StudentDocument {
-    @DocumentId
     private String id;
     private String schoolId;
     private String year;

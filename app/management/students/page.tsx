@@ -78,6 +78,11 @@ export default function StudentsPage() {
   }, [debouncedQuery, yearFilter]);
 
   useEffect(() => {
+    setYearFilter(year || '');
+    setPage(1);
+  }, [year]);
+
+  useEffect(() => {
     if (!canManageStudents) return;
     setStudentForm((prev) => ({
       ...prev,
@@ -181,6 +186,7 @@ export default function StudentsPage() {
     setEditingId(s.id);
     setSuccess('');
     setFormError('');
+    setShowForm(true);
     setStudentForm({
       firstName: s.firstName || '',
       lastNameFather: s.lastNameFather || '',
@@ -219,203 +225,14 @@ export default function StudentsPage() {
           <div>
             <p className="text-sm text-gray-500">Gestión escolar</p>
             <h1 className="text-4xl font-bold text-gray-900">Estudiantes</h1>
-            <p className="text-gray-600 mt-1">Datos reales (se mostrará vacío si aún no hay estudiantes)</p>
+            <p className="text-gray-600 mt-1">Base de estudiantes activa del colegio</p>
           </div>
           <Link href="/dashboard" className="text-primary hover:text-green-800 transition-colors">
             ← Volver al dashboard
           </Link>
         </div>
 
-        {(canCreateStudents || canUpdateStudents) && (
-          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900">Listado</h2>
-                <p className="text-sm text-gray-600">
-                  Mostrando {paginated.length} de {total} estudiantes
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Buscar por nombre, curso o email..."
-                  className="w-full sm:w-80 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-                <input
-                  type="text"
-                  value={yearFilter}
-                  onChange={(e) => setYearFilter(e.target.value)}
-                  placeholder="Año (ej: 2025)"
-                  className="w-full sm:w-32 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-                {canCreateStudents && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      resetForm();
-                      setShowForm(true);
-                    }}
-                    className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors"
-                  >
-                    + Nuevo estudiante
-                  </button>
-                )}
-              </div>
-            </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Apellido paterno</label>
-                <input
-                  type="text"
-                  value={studentForm.lastNameFather}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, lastNameFather: e.target.value }))}
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Apellido materno</label>
-                <input
-                  type="text"
-                  value={studentForm.lastNameMother}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, lastNameMother: e.target.value }))}
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Curso</label>
-                <input
-                  type="text"
-                  value={studentForm.course}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, course: e.target.value }))}
-                  placeholder="Ej: 4B"
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Año</label>
-                <input
-                  type="text"
-                  value={studentForm.year}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, year: e.target.value }))}
-                  placeholder="Ej: 2025"
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">RUN</label>
-                <input
-                  type="text"
-                  value={studentForm.run}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, run: e.target.value }))}
-                  placeholder="11.111.111-1"
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Género</label>
-                <input
-                  type="text"
-                  value={studentForm.gender}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, gender: e.target.value }))}
-                  placeholder="Opcional"
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input
-                  type="email"
-                  value={studentForm.email}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, email: e.target.value }))}
-                  placeholder="correo@colegio.cl"
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Teléfono</label>
-                <input
-                  type="text"
-                  value={studentForm.phone}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, phone: e.target.value }))}
-                  placeholder="+56 9 1234 5678"
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Comuna</label>
-                <input
-                  type="text"
-                  value={studentForm.commune}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, commune: e.target.value }))}
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Dirección</label>
-                <input
-                  type="text"
-                  value={studentForm.address}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, address: e.target.value }))}
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Apoderado (nombre)</label>
-                <input
-                  type="text"
-                  value={studentForm.guardianFirstName}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, guardianFirstName: e.target.value }))}
-                  placeholder="Nombre apoderado"
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Apoderado (apellido)</label>
-                <input
-                  type="text"
-                  value={studentForm.guardianLastName}
-                  onChange={(e) => setStudentForm((prev) => ({ ...prev, guardianLastName: e.target.value }))}
-                  placeholder="Apellido apoderado"
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
-              {isGlobalAdmin && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Colegio (ID)</label>
-                  <input
-                    type="text"
-                    value={studentForm.schoolId}
-                    onChange={(e) => setStudentForm((prev) => ({ ...prev, schoolId: e.target.value }))}
-                    placeholder="ID de colegio"
-                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                  />
-                </div>
-              )}
-              <div className="md:col-span-2 flex justify-end gap-3">
-                {editingId && (
-                  <button
-                    type="button"
-                    onClick={resetForm}
-                    className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
-                    disabled={saving}
-                  >
-                    Cancelar edición
-                  </button>
-                )}
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors disabled:opacity-60"
-                >
-                  {saving ? 'Guardando...' : editingId ? 'Actualizar estudiante' : 'Crear estudiante'}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
                 <h2 className="text-xl font-semibold text-gray-900">Listado</h2>
@@ -423,23 +240,28 @@ export default function StudentsPage() {
                   Mostrando {paginated.length} de {total} estudiantes
                 </p>
               </div>
-              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Buscar por nombre, curso o email..."
-                  className="w-full sm:w-80 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-                <input
-                  type="text"
-                  value={yearFilter}
-                  onChange={(e) => setYearFilter(e.target.value)}
-                  placeholder="Año (ej: 2025)"
-                  className="w-full sm:w-32 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                />
-              </div>
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Buscar por nombre, curso o email..."
+                className="w-full sm:w-80 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+              />
+              {canCreateStudents && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetForm();
+                    setShowForm(true);
+                  }}
+                  className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors"
+                >
+                  + Nuevo estudiante
+                </button>
+              )}
             </div>
+          </div>
 
           {loading && <p className="text-sm text-gray-500">Cargando estudiantes...</p>}
           {listError && <p className="text-sm text-red-600">{listError}</p>}
@@ -542,6 +364,186 @@ export default function StudentsPage() {
           </div>
         </div>
       </div>
+
+      <Modal
+        isOpen={showForm}
+        onClose={() => {
+          setShowForm(false);
+          resetForm();
+        }}
+        title={editingId ? 'Editar estudiante' : 'Nuevo estudiante'}
+        size="xl"
+      >
+        <form className="grid grid-cols-1 md:grid-cols-2 gap-3" onSubmit={handleSubmit}>
+          {formError && (
+            <div className="md:col-span-2 p-3 bg-red-100 border border-red-300 rounded text-red-700 text-sm">
+              {formError}
+            </div>
+          )}
+          {success && (
+            <div className="md:col-span-2 p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+              {success}
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nombres</label>
+            <input
+              type="text"
+              value={studentForm.firstName}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, firstName: e.target.value }))}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Apellido paterno</label>
+            <input
+              type="text"
+              value={studentForm.lastNameFather}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, lastNameFather: e.target.value }))}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Apellido materno</label>
+            <input
+              type="text"
+              value={studentForm.lastNameMother}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, lastNameMother: e.target.value }))}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Curso</label>
+            <input
+              type="text"
+              value={studentForm.course}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, course: e.target.value }))}
+              placeholder="Ej: 4B"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Año</label>
+            <input
+              type="text"
+              value={studentForm.year}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, year: e.target.value }))}
+              placeholder="Ej: 2025"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">RUN</label>
+            <input
+              type="text"
+              value={studentForm.run}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, run: e.target.value }))}
+              placeholder="11.111.111-1"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Género</label>
+            <input
+              type="text"
+              value={studentForm.gender}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, gender: e.target.value }))}
+              placeholder="Opcional"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+            <input
+              type="email"
+              value={studentForm.email}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, email: e.target.value }))}
+              placeholder="correo@colegio.cl"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Teléfono</label>
+            <input
+              type="text"
+              value={studentForm.phone}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, phone: e.target.value }))}
+              placeholder="+56 9 1234 5678"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Comuna</label>
+            <input
+              type="text"
+              value={studentForm.commune}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, commune: e.target.value }))}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Dirección</label>
+            <input
+              type="text"
+              value={studentForm.address}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, address: e.target.value }))}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Apoderado (nombre)</label>
+            <input
+              type="text"
+              value={studentForm.guardianFirstName}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, guardianFirstName: e.target.value }))}
+              placeholder="Nombre apoderado"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Apoderado (apellido)</label>
+            <input
+              type="text"
+              value={studentForm.guardianLastName}
+              onChange={(e) => setStudentForm((prev) => ({ ...prev, guardianLastName: e.target.value }))}
+              placeholder="Apellido apoderado"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+            />
+          </div>
+          {isGlobalAdmin && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Colegio (ID)</label>
+              <input
+                type="text"
+                value={studentForm.schoolId}
+                onChange={(e) => setStudentForm((prev) => ({ ...prev, schoolId: e.target.value }))}
+                placeholder="ID de colegio"
+                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+              />
+            </div>
+          )}
+          <div className="md:col-span-2 flex justify-end gap-3">
+            {editingId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+                disabled={saving}
+              >
+                Cancelar edición
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors disabled:opacity-60"
+            >
+              {saving ? 'Guardando...' : editingId ? 'Actualizar estudiante' : 'Crear estudiante'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </ProtectedLayout>
   );
 }

@@ -21,13 +21,14 @@ public class DeviceTokenService {
         this.firestore = firestore;
     }
 
-    public void register(String email, String token, String platform) {
+    public void register(String email, String token, String platform, String schoolId) {
         try {
             if (email == null || email.isBlank() || token == null || token.isBlank()) {
                 return;
             }
+            String tenant = schoolId == null || schoolId.isBlank() ? "global" : schoolId;
             // eliminar duplicados del mismo token
-            ApiFuture<QuerySnapshot> existing = firestore.collection("deviceTokens")
+            ApiFuture<QuerySnapshot> existing = firestore.collectionGroup("deviceTokens")
                     .whereEqualTo("token", token)
                     .get();
             for (QueryDocumentSnapshot doc : existing.get().getDocuments()) {
@@ -38,9 +39,10 @@ public class DeviceTokenService {
                     email.toLowerCase(),
                     token,
                     platform != null ? platform : "unknown",
-                    Instant.now()
+                    Instant.now(),
+                    tenant
             );
-            firestore.collection("deviceTokens").document(dt.getId()).set(dt);
+            tenantDeviceTokens(tenant).document(dt.getId()).set(dt);
         } catch (InterruptedException | ExecutionException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("No se pudo registrar token de dispositivo", e);
@@ -50,7 +52,7 @@ public class DeviceTokenService {
     public void unregister(String token) {
         try {
             if (token == null || token.isBlank()) return;
-            ApiFuture<QuerySnapshot> existing = firestore.collection("deviceTokens")
+            ApiFuture<QuerySnapshot> existing = firestore.collectionGroup("deviceTokens")
                     .whereEqualTo("token", token)
                     .get();
             for (QueryDocumentSnapshot doc : existing.get().getDocuments()) {
@@ -62,12 +64,16 @@ public class DeviceTokenService {
         }
     }
 
-    public List<String> tokensForRecipients(List<String> recipients) {
+    public List<String> tokensForRecipients(List<String> recipients, String schoolId) {
         try {
             if (recipients == null || recipients.isEmpty()) return List.of();
-            ApiFuture<QuerySnapshot> snap = firestore.collection("deviceTokens")
-                    .whereIn("email", recipients.stream().map(String::toLowerCase).collect(Collectors.toList()))
-                    .get();
+            var emails = recipients.stream().map(String::toLowerCase).collect(Collectors.toList());
+            com.google.cloud.firestore.Query base = firestore.collectionGroup("deviceTokens")
+                    .whereIn("email", emails);
+            if (schoolId != null && !schoolId.isBlank()) {
+                base = base.whereEqualTo("schoolId", schoolId);
+            }
+            ApiFuture<QuerySnapshot> snap = base.get();
             return snap.get().getDocuments().stream()
                     .map(d -> d.toObject(DeviceToken.class).getToken())
                     .filter(t -> t != null && !t.isBlank())
@@ -77,5 +83,10 @@ public class DeviceTokenService {
             Thread.currentThread().interrupt();
             throw new RuntimeException("No se pudieron obtener tokens", e);
         }
+    }
+
+    private com.google.cloud.firestore.CollectionReference tenantDeviceTokens(String tenantId) {
+        String safe = tenantId == null || tenantId.isBlank() ? "global" : tenantId;
+        return firestore.collection("tenants").document(safe).collection("deviceTokens");
     }
 }

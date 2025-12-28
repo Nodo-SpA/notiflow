@@ -75,18 +75,22 @@ public class MessageService {
         this.fcmCredentials = parseCredentials(fcmCredentialsJson);
     }
 
-    public MessageListResponse list(String year, String senderEmailFilter, String query, int page, int pageSize) {
+    public MessageListResponse list(String schoolId, boolean isGlobal, String year, String recipientEmailFilter, String query, int page, int pageSize) {
         try {
             int safePage = Math.max(1, page);
             int safeSize = Math.min(Math.max(1, pageSize), 100);
-            var base = firestore.collection("messages");
-            var queryRef = (year != null && !year.isBlank())
-                    ? base.whereEqualTo("year", year)
-                    : base;
-            if (senderEmailFilter != null && !senderEmailFilter.isBlank()) {
-                queryRef = queryRef.whereArrayContains("recipients", senderEmailFilter);
+            com.google.cloud.firestore.Query base = firestore.collectionGroup("messages");
+            if (!isGlobal || (schoolId != null && !schoolId.isBlank())) {
+                String targetSchool = (schoolId == null || schoolId.isBlank()) ? "global" : schoolId;
+                base = base.whereEqualTo("schoolId", targetSchool);
             }
-            return fetch(queryRef, query, safePage, safeSize);
+            if (year != null && !year.isBlank()) {
+                base = base.whereEqualTo("year", year);
+            }
+            if (recipientEmailFilter != null && !recipientEmailFilter.isBlank()) {
+                base = base.whereArrayContains("recipients", recipientEmailFilter);
+            }
+            return fetch(base, query, safePage, safeSize);
         } catch (InterruptedException | ExecutionException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Error listando mensajes", e);
@@ -95,11 +99,12 @@ public class MessageService {
 
     public MessageDto getById(String id) {
         try {
-            var snap = firestore.collection("messages").document(id).get().get();
-            if (!snap.exists()) {
+            DocumentReference ref = findMessageRef(id, null);
+            if (ref == null) {
                 throw new ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Mensaje no encontrado");
             }
-            MessageDocument msg = snap.toObject(MessageDocument.class);
+            var snap = ref.get().get();
+            MessageDocument msg = snap.exists() ? snap.toObject(MessageDocument.class) : null;
             if (msg == null) {
                 throw new ResponseStatusException(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR, "Mensaje inválido");
             }
@@ -175,9 +180,29 @@ public class MessageService {
         return snapshot.getCount();
     }
 
+    private com.google.cloud.firestore.CollectionReference tenantMessages(String tenantId) {
+        String safeTenant = tenantId == null || tenantId.isBlank() ? "global" : tenantId;
+        return firestore.collection("tenants").document(safeTenant).collection("messages");
+    }
+
+    private DocumentReference findMessageRef(String messageId, String schoolId) throws ExecutionException, InterruptedException {
+        com.google.cloud.firestore.Query q = firestore.collectionGroup("messages")
+                .whereEqualTo("id", messageId)
+                .limit(1);
+        if (schoolId != null && !schoolId.isBlank()) {
+            q = q.whereEqualTo("schoolId", schoolId);
+        }
+        List<QueryDocumentSnapshot> docs = q.get().get().getDocuments();
+        if (docs.isEmpty()) return null;
+        return docs.get(0).getReference();
+    }
+
     public void delete(String id) {
         try {
-            var ref = firestore.collection("messages").document(id);
+            DocumentReference ref = findMessageRef(id, null);
+            if (ref == null) {
+                throw new ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Mensaje no encontrado");
+            }
             ref.delete().get();
         } catch (InterruptedException | ExecutionException e) {
             Thread.currentThread().interrupt();
@@ -254,7 +279,7 @@ public class MessageService {
                 if (channels.contains("app")) {
                     msg.setAppStatus(MessageStatus.PENDING);
                 }
-                DocumentReference ref = firestore.collection("messages").document(msg.getId());
+                DocumentReference ref = tenantMessages(schoolId).document(msg.getId());
                 ref.set(msg).get();
                 return toDto(msg, CurrentUser.fromContext().orElse(null));
             }
@@ -288,7 +313,7 @@ public class MessageService {
     public int processScheduled() {
         try {
             Instant now = Instant.now();
-            var query = firestore.collection("messages")
+            var query = firestore.collectionGroup("messages")
                     .whereEqualTo("status", MessageStatus.SCHEDULED)
                     .whereLessThanOrEqualTo("scheduledAt", com.google.cloud.Timestamp.ofTimeSecondsAndNanos(now.getEpochSecond(), now.getNano()))
                     .get()
@@ -390,7 +415,7 @@ public class MessageService {
         }
         if (channels.contains("app")) {
             appStatus = MessageStatus.PENDING;
-            List<String> tokens = deviceTokenService.tokensForRecipients(msg.getRecipients());
+            List<String> tokens = deviceTokenService.tokensForRecipients(msg.getRecipients(), schoolId);
             if (!tokens.isEmpty()) {
                 sendPushNotifications(tokens, subject, msg.getReason(), msg.getId(), schoolId);
             }
@@ -402,7 +427,7 @@ public class MessageService {
         msg.setScheduledAt(null);
 
         try {
-            firestore.collection("messages").document(msg.getId()).set(msg).get();
+            tenantMessages(schoolId).document(msg.getId()).set(msg).get();
         } catch (InterruptedException | ExecutionException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Error actualizando mensaje enviado", e);
@@ -624,11 +649,11 @@ public class MessageService {
             if (readerEmail == null || readerEmail.isBlank()) {
                 throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "Email requerido");
             }
-            DocumentReference ref = firestore.collection("messages").document(messageId);
-            var snapshot = ref.get().get();
-            if (!snapshot.exists()) {
+            DocumentReference ref = findMessageRef(messageId, null);
+            if (ref == null) {
                 throw new ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Mensaje no encontrado");
             }
+            var snapshot = ref.get().get();
             MessageDocument msg = snapshot.toObject(MessageDocument.class);
             if (msg == null) {
                 throw new ResponseStatusException(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR, "Mensaje inválido");

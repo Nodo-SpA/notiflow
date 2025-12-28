@@ -1,25 +1,24 @@
 package com.notiflow.model;
 
-import com.google.cloud.firestore.annotation.DocumentId;
-
 import java.time.Instant;
 
 public class DeviceToken {
-    @DocumentId
     private String id;
     private String email;
     private String token;
     private String platform;
     private Instant createdAt;
+    private String schoolId;
 
     public DeviceToken() {}
 
-    public DeviceToken(String id, String email, String token, String platform, Instant createdAt) {
+    public DeviceToken(String id, String email, String token, String platform, Instant createdAt, String schoolId) {
         this.id = id;
         this.email = email;
         this.token = token;
         this.platform = platform;
         this.createdAt = createdAt;
+        this.schoolId = schoolId;
     }
 
     public String getId() {
@@ -60,5 +59,13 @@ public class DeviceToken {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getSchoolId() {
+        return schoolId;
+    }
+
+    public void setSchoolId(String schoolId) {
+        this.schoolId = schoolId;
     }
 }

@@ -1,15 +1,13 @@
 package com.notiflow.model;
 
-import com.google.cloud.firestore.annotation.DocumentId;
-
 import java.time.Instant;
 
 public class TemplateDocument {
-    @DocumentId
     private String id;
     private String name;
     private String content;
     private String ownerEmail;
+    private String schoolId;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -23,6 +21,8 @@ public class TemplateDocument {
     public void setContent(String content) { this.content = content; }
     public String getOwnerEmail() { return ownerEmail; }
     public void setOwnerEmail(String ownerEmail) { this.ownerEmail = ownerEmail; }
+    public String getSchoolId() { return schoolId; }
+    public void setSchoolId(String schoolId) { this.schoolId = schoolId; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }

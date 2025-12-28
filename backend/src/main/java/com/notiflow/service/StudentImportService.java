@@ -118,7 +118,7 @@ public class StudentImportService {
     }
 
     private boolean upsertStudent(StudentDocument s) throws ExecutionException, InterruptedException {
-        DocumentReference ref = firestore.collection("students").document(s.getId());
+        DocumentReference ref = tenantStudents(s.getSchoolId()).document(s.getId());
         ApiFuture<DocumentSnapshot> snapFut = ref.get();
         DocumentSnapshot snap = snapFut.get();
         if (snap.exists()) {
@@ -142,7 +142,7 @@ public class StudentImportService {
                 .distinct()
                 .collect(Collectors.toList());
         try {
-            DocumentReference ref = firestore.collection("groups").document(id);
+            DocumentReference ref = tenantGroups(schoolId).document(id);
             ApiFuture<DocumentSnapshot> fut = ref.get();
             DocumentSnapshot snap = fut.get();
             GroupDocument g = snap.exists() ? snap.toObject(GroupDocument.class) : new GroupDocument();
@@ -199,5 +199,15 @@ public class StudentImportService {
 
     private String slug(String text) {
         return NON_ALNUM.matcher(text.toLowerCase()).replaceAll("-");
+    }
+
+    private com.google.cloud.firestore.CollectionReference tenantStudents(String tenantId) {
+        String safeTenant = tenantId == null || tenantId.isBlank() ? "global" : tenantId;
+        return firestore.collection("tenants").document(safeTenant).collection("students");
+    }
+
+    private com.google.cloud.firestore.CollectionReference tenantGroups(String tenantId) {
+        String safeTenant = tenantId == null || tenantId.isBlank() ? "global" : tenantId;
+        return firestore.collection("tenants").document(safeTenant).collection("groups");
     }
 }

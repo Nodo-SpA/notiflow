@@ -25,10 +25,14 @@ public class TemplateService {
         this.firestore = firestore;
     }
 
-    public List<TemplateDto> listByOwner(String ownerEmail) {
+    public List<TemplateDto> listByOwner(String ownerEmail, String schoolId) {
         try {
-            ApiFuture<QuerySnapshot> query = firestore.collection("templates")
-                    .whereEqualTo("ownerEmail", ownerEmail.toLowerCase())
+            com.google.cloud.firestore.Query base = firestore.collectionGroup("templates")
+                    .whereEqualTo("ownerEmail", ownerEmail.toLowerCase());
+            if (schoolId != null && !schoolId.isBlank() && !"global".equalsIgnoreCase(schoolId)) {
+                base = base.whereEqualTo("schoolId", schoolId);
+            }
+            ApiFuture<QuerySnapshot> query = base
                     .orderBy("updatedAt", com.google.cloud.firestore.Query.Direction.DESCENDING)
                     .get();
             List<QueryDocumentSnapshot> docs = query.get().getDocuments();
@@ -43,17 +47,18 @@ public class TemplateService {
         }
     }
 
-    public TemplateDto create(TemplateRequest request, String ownerEmail) {
+    public TemplateDto create(TemplateRequest request, String ownerEmail, String schoolId) {
         try {
             TemplateDocument doc = new TemplateDocument();
             doc.setId(UUID.randomUUID().toString());
             doc.setName(request.name());
             doc.setContent(request.content());
             doc.setOwnerEmail(ownerEmail.toLowerCase());
+            doc.setSchoolId(schoolId == null || schoolId.isBlank() ? "global" : schoolId);
             Instant now = Instant.now();
             doc.setCreatedAt(now);
             doc.setUpdatedAt(now);
-            DocumentReference ref = firestore.collection("templates").document(doc.getId());
+            DocumentReference ref = tenantTemplates(doc.getSchoolId()).document(doc.getId());
             ref.set(doc).get();
             return new TemplateDto(doc.getId(), doc.getName(), doc.getContent(), doc.getCreatedAt(), doc.getUpdatedAt());
         } catch (InterruptedException | ExecutionException e) {
@@ -62,11 +67,14 @@ public class TemplateService {
         }
     }
 
-    public TemplateDto update(String id, TemplateRequest request, String ownerEmail) {
+    public TemplateDto update(String id, TemplateRequest request, String ownerEmail, String schoolId) {
         try {
-            DocumentReference ref = firestore.collection("templates").document(id);
+            DocumentReference ref = findTemplateRef(id, ownerEmail, schoolId);
+            if (ref == null) {
+                throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Plantilla no encontrada");
+            }
             TemplateDocument existing = ref.get().get().toObject(TemplateDocument.class);
-            if (existing == null || !ownerEmail.equalsIgnoreCase(existing.getOwnerEmail())) {
+            if (existing == null) {
                 throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Plantilla no encontrada");
             }
             existing.setName(request.name());
@@ -80,11 +88,10 @@ public class TemplateService {
         }
     }
 
-    public void delete(String id, String ownerEmail) {
+    public void delete(String id, String ownerEmail, String schoolId) {
         try {
-            DocumentReference ref = firestore.collection("templates").document(id);
-            TemplateDocument existing = ref.get().get().toObject(TemplateDocument.class);
-            if (existing == null || !ownerEmail.equalsIgnoreCase(existing.getOwnerEmail())) {
+            DocumentReference ref = findTemplateRef(id, ownerEmail, schoolId);
+            if (ref == null) {
                 throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Plantilla no encontrada");
             }
             ref.delete().get();
@@ -92,5 +99,23 @@ public class TemplateService {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Error eliminando plantilla", e);
         }
+    }
+
+    private DocumentReference findTemplateRef(String id, String ownerEmail, String schoolId) throws ExecutionException, InterruptedException {
+        com.google.cloud.firestore.Query q = firestore.collectionGroup("templates")
+                .whereEqualTo("id", id)
+                .whereEqualTo("ownerEmail", ownerEmail.toLowerCase())
+                .limit(1);
+        if (schoolId != null && !schoolId.isBlank()) {
+            q = q.whereEqualTo("schoolId", schoolId);
+        }
+        List<QueryDocumentSnapshot> docs = q.get().get().getDocuments();
+        if (docs.isEmpty()) return null;
+        return docs.get(0).getReference();
+    }
+
+    private com.google.cloud.firestore.CollectionReference tenantTemplates(String tenantId) {
+        String safeTenant = tenantId == null || tenantId.isBlank() ? "global" : tenantId;
+        return firestore.collection("tenants").document(safeTenant).collection("templates");
     }
 }
