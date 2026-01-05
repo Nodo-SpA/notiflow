@@ -1,6 +1,7 @@
 package com.notiflow.model;
 
 import java.time.Instant;
+import java.util.List;
 
 public class StudentDocument {
     private String id;
@@ -18,6 +19,8 @@ public class StudentDocument {
     private String phone;
     private String guardianFirstName;
     private String guardianLastName;
+    private List<com.notiflow.dto.GuardianContact> guardians;
+    private List<String> guardianEmails;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -54,6 +57,10 @@ public class StudentDocument {
     public void setGuardianFirstName(String guardianFirstName) { this.guardianFirstName = guardianFirstName; }
     public String getGuardianLastName() { return guardianLastName; }
     public void setGuardianLastName(String guardianLastName) { this.guardianLastName = guardianLastName; }
+    public List<com.notiflow.dto.GuardianContact> getGuardians() { return guardians; }
+    public void setGuardians(List<com.notiflow.dto.GuardianContact> guardians) { this.guardians = guardians; }
+    public List<String> getGuardianEmails() { return guardianEmails; }
+    public void setGuardianEmails(List<String> guardianEmails) { this.guardianEmails = guardianEmails; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }

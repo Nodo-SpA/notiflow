@@ -18,6 +18,8 @@ import com.notiflow.model.MessageDocument;
 import com.notiflow.model.MessageStatus;
 import com.notiflow.service.SchoolService;
 import com.notiflow.util.CurrentUser;
+import com.notiflow.model.UserDocument;
+import com.notiflow.model.UserRole;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import com.google.auth.oauth2.GoogleCredentials;
@@ -47,6 +49,7 @@ public class MessageService {
     private final SchoolService schoolService;
     private final String attachmentsBucket;
     private final DeviceTokenService deviceTokenService;
+    private final TeacherPermissionService teacherPermissionService;
     private final String fcmServerKey;
     private final String fcmCredentialsJson;
     private final String fcmProjectId;
@@ -58,6 +61,7 @@ public class MessageService {
             Storage storage,
             SchoolService schoolService,
             DeviceTokenService deviceTokenService,
+            TeacherPermissionService teacherPermissionService,
             @org.springframework.beans.factory.annotation.Value("${ATTACHMENTS_BUCKET:}") String attachmentsBucket,
             @org.springframework.beans.factory.annotation.Value("${app.fcm.server-key:}") String fcmServerKey,
             @org.springframework.beans.factory.annotation.Value("${app.fcm.credentials-json:}") String fcmCredentialsJson,
@@ -73,9 +77,10 @@ public class MessageService {
         this.fcmCredentialsJson = fcmCredentialsJson;
         this.fcmProjectId = fcmProjectId;
         this.fcmCredentials = parseCredentials(fcmCredentialsJson);
+        this.teacherPermissionService = teacherPermissionService;
     }
 
-    public MessageListResponse list(String schoolId, boolean isGlobal, String year, String recipientEmailFilter, String query, int page, int pageSize) {
+    public MessageListResponse list(String schoolId, boolean isGlobal, String year, String senderEmailFilter, String query, int page, int pageSize) {
         try {
             int safePage = Math.max(1, page);
             int safeSize = Math.min(Math.max(1, pageSize), 100);
@@ -87,8 +92,8 @@ public class MessageService {
             if (year != null && !year.isBlank()) {
                 base = base.whereEqualTo("year", year);
             }
-            if (recipientEmailFilter != null && !recipientEmailFilter.isBlank()) {
-                base = base.whereArrayContains("recipients", recipientEmailFilter);
+            if (senderEmailFilter != null && !senderEmailFilter.isBlank()) {
+                base = base.whereEqualTo("senderEmail", senderEmailFilter.toLowerCase());
             }
             return fetch(base, query, safePage, safeSize);
         } catch (InterruptedException | ExecutionException e) {
@@ -223,6 +228,25 @@ public class MessageService {
             List<String> channels = request.channels() != null && !request.channels().isEmpty()
                     ? request.channels()
                     : List.of("email");
+            List<String> groupIds = request.groupIds() == null ? List.of() : request.groupIds().stream().filter(g -> g != null && !g.isBlank()).map(String::trim).toList();
+            senderName = resolveSenderName(senderName, senderId);
+
+            // Restricción por profesor: solo grupos permitidos
+            if (current != null && "teacher".equalsIgnoreCase(current.role())) {
+                List<String> allowed = teacherPermissionService.getAllowedGroups(schoolId, senderId);
+                if (!groupIds.isEmpty()) {
+                    if (allowed.isEmpty()) {
+                        throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "No tienes permisos de envío a grupos");
+                    }
+                    boolean subset = groupIds.stream().allMatch(allowed::contains);
+                    if (!subset) {
+                        throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "No puedes enviar a grupos fuera de tus permisos");
+                    }
+                } else {
+                    // Envío directo (sin grupos): solo a usuarios de plataforma (no estudiantes)
+                    validateTeacherDirectRecipients(request.recipients());
+                }
+            }
 
             MessageDocument msg = new MessageDocument();
             msg.setId(UUID.randomUUID().toString());
@@ -235,6 +259,7 @@ public class MessageService {
             msg.setSchoolId(schoolId);
             msg.setReason(request.reason());
             msg.setYear(resolvedYear);
+            msg.setGroupIds(groupIds);
             msg.setAppReadBy(new ArrayList<>());
             if (channels.contains("app") && request.recipients() != null) {
                 Map<String, MessageStatus> perRecipient = new HashMap<>();
@@ -291,6 +316,42 @@ public class MessageService {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Error creando mensaje", e);
         }
+    }
+
+    private String resolveSenderName(String name, String email) {
+        String cleanName = name == null ? "" : name.trim();
+        String cleanEmail = email == null ? "" : email.trim().toLowerCase();
+        if (cleanName.isBlank() && !cleanEmail.isBlank()) {
+            cleanName = cleanEmail.split("@")[0];
+        }
+        if (!cleanEmail.isBlank()) {
+            // Si el nombre es idéntico al correo, intenta buscar el nombre real en usuarios
+            if (cleanName.equalsIgnoreCase(cleanEmail)) {
+                String fetched = fetchUserNameByEmail(cleanEmail);
+                if (fetched != null && !fetched.isBlank()) {
+                    return fetched;
+                }
+            }
+        }
+        return cleanName.isBlank() ? "—" : cleanName;
+    }
+
+    private String fetchUserNameByEmail(String email) {
+        try {
+            ApiFuture<QuerySnapshot> query = firestore.collectionGroup("users")
+                    .whereEqualTo("email", email.toLowerCase())
+                    .limit(1)
+                    .get();
+            List<QueryDocumentSnapshot> docs = query.get().getDocuments();
+            if (docs.isEmpty()) return null;
+            UserDocument u = docs.get(0).toObject(UserDocument.class);
+            if (u != null && u.getName() != null && !u.getName().isBlank()) {
+                return u.getName();
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            Thread.currentThread().interrupt();
+        }
+        return null;
     }
 
     private void validateAttachments(List<AttachmentRequest> attachments) {
@@ -479,6 +540,7 @@ public class MessageService {
                 msg.getAppStatuses(),
                 msg.getSchoolId(),
                 msg.getYear(),
+                msg.getGroupIds(),
                 msg.getStatus(),
                 msg.getScheduledAt(),
                 msg.getCreatedAt(),
@@ -512,6 +574,58 @@ public class MessageService {
                     key
             );
         }).filter(Objects::nonNull).toList();
+    }
+
+    private void validateTeacherDirectRecipients(List<String> recipients) {
+        if (recipients == null || recipients.isEmpty()) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "No hay destinatarios");
+        }
+        // Permitidos: usuarios de plataforma con rol en el set permitido
+        List<String> normalized = recipients.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .map(String::toLowerCase)
+                .toList();
+        if (normalized.isEmpty()) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "No hay destinatarios válidos");
+        }
+        Map<String, UserRole> roles = fetchUserRoles(normalized);
+        for (String email : normalized) {
+            UserRole role = roles.get(email);
+            if (role == null) {
+                throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "Solo puedes enviar directo a usuarios de la plataforma (admin/coordinador/profesor)");
+            }
+            String r = role.name().toUpperCase();
+            if (!(r.equals("ADMIN") || r.equals("COORDINATOR") || r.equals("GESTION_ESCOLAR") || r.equals("SUPERADMIN") || r.equals("TEACHER"))) {
+                throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "Solo puedes enviar directo a usuarios de la plataforma (admin/coordinador/profesor)");
+            }
+        }
+    }
+
+    private Map<String, UserRole> fetchUserRoles(List<String> emails) {
+        Map<String, UserRole> result = new HashMap<>();
+        try {
+            // Firestore whereIn supports up to 10; procesar en lotes
+            int batchSize = 10;
+            for (int i = 0; i < emails.size(); i += batchSize) {
+                List<String> batch = emails.subList(i, Math.min(i + batchSize, emails.size()));
+                ApiFuture<QuerySnapshot> query = firestore.collectionGroup("users")
+                        .whereIn("email", batch)
+                        .get();
+                List<QueryDocumentSnapshot> docs = query.get().getDocuments();
+                for (QueryDocumentSnapshot doc : docs) {
+                    UserDocument u = doc.toObject(UserDocument.class);
+                    if (u != null && u.getEmail() != null && u.getRole() != null) {
+                        result.put(u.getEmail().toLowerCase(), u.getRole());
+                    }
+                }
+            }
+            return result;
+        } catch (InterruptedException | ExecutionException e) {
+            Thread.currentThread().interrupt();
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR, "Error validando destinatarios", e);
+        }
     }
 
     private void sendPushNotifications(List<String> tokens, String title, String body, String messageId, String schoolId) {
@@ -693,6 +807,7 @@ public class MessageService {
     private String buildHtmlBody(String content, String senderName, String senderEmail, String reason, List<AttachmentRequest> attachments, String logoUrl, String schoolName) {
         List<AttachmentRequest> attList = attachments == null ? java.util.Collections.emptyList() : attachments;
         String htmlContent = renderContentHtml(content);
+        final String notiflowBadge = "https://www.notiflow.cl/Naranjo_Degradado.png";
 
         // Adjunta una imagen inline si existe
         AttachmentRequest inlineImg = attList.stream()
@@ -714,11 +829,11 @@ public class MessageService {
         return """
                 <div style="font-family: 'Helvetica Neue', Arial, sans-serif; background:#e0f2fe; padding:24px;">
                   <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
-                    <div style="background:#fbbf24;color:#7a4c00;padding:16px 20px;font-size:16px;font-weight:700;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                    <div style="background:#fde68a;color:#854d0e;padding:16px 20px;font-size:16px;font-weight:700;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
                       <div style="flex:0 0 auto;">%s</div>
                       <div style="flex:1;min-width:200px;">
-                        <div style="font-size:14px;color:#92400e;font-weight:700;">%s</div>
-                        <div style="font-size:13px;color:#b45309;">Asunto: %s</div>
+                        <div style="font-size:15px;color:#92400e;font-weight:700;">%s</div>
+                        <div style="font-size:14px;color:#7a3a00;font-weight:800;letter-spacing:0.02em;">Asunto: %s</div>
                         <div style="font-size:12px;color:#b45309;">Enviado por: %s</div>
                       </div>
                     </div>
@@ -726,11 +841,14 @@ public class MessageService {
                       %s
                     </div>
                     <div style="padding:16px 20px;border-top:1px solid #e5e7eb;font-size:13px;color:#6b7280;">
-                      Enviado a través de Notiflow
+                      <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
+                        <img src="%s" alt="Notiflow" style="height:16px;width:auto;display:block;" />
+                        <span>Enviado a través de Notiflow</span>
+                      </div>
                     </div>
                   </div>
                 </div>
-                """.formatted(logoBlock, schoolLine, headerText, senderLine, htmlContent);
+                """.formatted(logoBlock, schoolLine, headerText, senderLine, htmlContent, notiflowBadge);
     }
 
     private String renderContentHtml(String content) {

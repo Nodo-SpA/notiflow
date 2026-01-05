@@ -6,6 +6,7 @@ import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QueryDocumentSnapshot;
 import com.google.cloud.firestore.QuerySnapshot;
+import com.google.cloud.firestore.FieldPath;
 import com.notiflow.dto.EventDto;
 import com.notiflow.dto.EventRequest;
 import com.notiflow.model.EventDocument;
@@ -106,6 +107,76 @@ public class EventService {
         }
     }
 
+    public void delete(String eventId, CurrentUser user) {
+        if (eventId == null || eventId.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST, "ID requerido");
+        }
+        String role = user.role() != null ? user.role().toUpperCase() : "";
+        try {
+            EventDocument ev = null;
+            QueryDocumentSnapshot docSnapshot = null;
+
+            // 1) Buscar por campo "id" en collectionGroup (evita problemas de documentId en group)
+            QuerySnapshot snapshot = firestore
+                    .collectionGroup("events")
+                    .whereEqualTo("id", eventId)
+                    .limit(1)
+                    .get()
+                    .get();
+            if (!snapshot.isEmpty()) {
+                docSnapshot = snapshot.getDocuments().get(0);
+                ev = docSnapshot.toObject(EventDocument.class);
+                if (ev != null) {
+                    ev.setId(docSnapshot.getId());
+                }
+            }
+
+            // 2) Si no se encontró, intentar directamente en el colegio del usuario
+            if (ev == null) {
+                String userSchool = user.schoolId() == null || user.schoolId().isBlank() ? "global" : user.schoolId();
+                var snap = tenantEvents(userSchool).document(eventId).get().get();
+                if (snap.exists()) {
+                    ev = snap.toObject(EventDocument.class);
+                    if (ev != null) ev.setId(eventId);
+                }
+            }
+
+            if (ev == null) {
+                throw new org.springframework.web.server.ResponseStatusException(HttpStatus.NOT_FOUND, "Evento no encontrado");
+            }
+
+            String schoolId = ev.getSchoolId() == null || ev.getSchoolId().isBlank() ? "global" : ev.getSchoolId();
+            boolean allow = false;
+            if ("SUPERADMIN".equals(role)) {
+                allow = user.email() != null && user.email().equalsIgnoreCase(ev.getCreatedByEmail());
+            } else if ("ADMIN".equals(role)) {
+                allow = user.schoolId() != null && user.schoolId().equalsIgnoreCase(schoolId);
+            } else if ("TEACHER".equals(role)) {
+                allow = user.email() != null && user.email().equalsIgnoreCase(ev.getCreatedByEmail())
+                        && user.schoolId() != null && user.schoolId().equalsIgnoreCase(schoolId);
+            }
+            if (!allow) {
+                throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "No puedes eliminar este evento");
+            }
+
+            // Usar la ruta de tenant/{schoolId}/events/{id} como fuente de verdad
+            DocumentReference tenantRef = tenantEvents(schoolId).document(eventId);
+            var tenantSnap = tenantRef.get().get();
+            if (tenantSnap.exists()) {
+                tenantRef.delete().get();
+            } else if (docSnapshot != null) {
+                // fallback: borrar donde realmente está si vino del collectionGroup
+                docSnapshot.getReference().delete().get();
+            } else {
+                throw new org.springframework.web.server.ResponseStatusException(HttpStatus.NOT_FOUND, "Evento no encontrado");
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Error eliminando evento", e);
+        }
+    }
+
+
     private boolean shouldRestrictToAudience(CurrentUser user) {
         String role = user.role() != null ? user.role().toUpperCase() : "";
         return role.equals("GUARDIAN") || role.equals("STUDENT");
@@ -139,8 +210,10 @@ public class EventService {
             throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "No puedes crear eventos en otro colegio");
         }
 
+        String targetId = (request.id() != null && !request.id().isBlank()) ? request.id() : UUID.randomUUID().toString();
+
         EventDocument ev = new EventDocument();
-        ev.setId(UUID.randomUUID().toString());
+        ev.setId(targetId);
         ev.setTitle(request.title());
         ev.setDescription(request.description());
         ev.setStartDateTime(request.startDateTime());

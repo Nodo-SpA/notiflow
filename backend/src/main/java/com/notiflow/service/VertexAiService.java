@@ -101,22 +101,27 @@ public class VertexAiService {
         var policy = policyService.getPolicy(schoolId);
         String base = policy.rewritePrompt();
 
+        String rulesText = String.join(", ", policy.moderationRules());
         String prompt = """
                 %s
+
+                Revisa el siguiente mensaje de un colegio con estas reglas: %s.
+                - Si viola alguna regla, responde allowed=false y reasons con el motivo. No cambies el texto.
+                - Si no viola reglas, corrige solo faltas de ortografía/acentos sin inventar palabras (si no conoces una, déjala igual).
+                - Mantén el idioma y links, resalta puntos clave con **negrita**.
+                - Responde SOLO en JSON: {"subject":"<asunto>","body":"<cuerpo>","allowed":true/false,"reasons":["..."]}.
 
                 Tono preferido: %s
                 Asunto original: %s
                 Cuerpo original:
                 %s
-
-                Reescribe ambos. Resalta puntos clave con **negrita** y mantiene links si existen.
-                Responde SOLO en JSON con la forma:
-                {"subject":"<asunto mejorado>","body":"<cuerpo mejorado con **negritas** y links detectados>"}
-                """.formatted(base, style, subject == null ? "" : subject, text);
+                """.formatted(base, rulesText, style, subject == null ? "" : subject, text);
 
         String raw = callModel(rewriteModel, prompt);
         String subjectSuggestion = subject;
         String bodySuggestion = text;
+        boolean allowed = true;
+        List<String> reasons = List.of();
         try {
             String cleaned = cleanJson(raw);
             JsonNode node = mapper.readTree(cleaned);
@@ -128,17 +133,21 @@ public class VertexAiService {
             } else if (node.has("text")) {
                 bodySuggestion = node.get("text").asText(text);
             }
+            if (node.has("allowed")) {
+                allowed = node.get("allowed").asBoolean(true);
+            }
+            if (node.has("reasons")) {
+                reasons = mapper.convertValue(node.get("reasons"), mapper.getTypeFactory().constructCollectionType(List.class, String.class));
+            }
         } catch (Exception e) {
             log.warn("No se pudo parsear JSON de rewrite, usando fallback. raw={}", raw);
             String fallback = raw == null ? "" : raw;
-            // intenta extraer "body": "..."
             java.util.regex.Matcher mBody = java.util.regex.Pattern
                     .compile("\"body\"\\s*:\\s*\"(.*?)\"", java.util.regex.Pattern.DOTALL)
                     .matcher(fallback);
             if (mBody.find()) {
                 bodySuggestion = mBody.group(1).replace("\\n", "\n");
             } else {
-                // si no se pudo, devuelve el texto original para no mostrar JSON completo al usuario
                 bodySuggestion = text;
             }
             java.util.regex.Matcher mSubj = java.util.regex.Pattern
@@ -149,9 +158,7 @@ public class VertexAiService {
             }
         }
 
-        String toModerate = (subjectSuggestion == null ? "" : subjectSuggestion + "\n") + bodySuggestion;
-        ModerationResult moderation = moderate(toModerate, schoolId);
-        return new RewriteModerateResult(bodySuggestion, subjectSuggestion, moderation.allowed(), moderation.reasons());
+        return new RewriteModerateResult(bodySuggestion, subjectSuggestion, allowed, reasons == null ? List.of() : reasons);
     }
 
     private String callModel(String model, String prompt) {
@@ -178,8 +185,9 @@ public class VertexAiService {
             HttpRequest request = requestFactory.buildPostRequest(new GenericUrl(url),
                     new JsonHttpContent(new JacksonFactory(), body));
             request.getHeaders().setAuthorization("Bearer " + token);
-            request.setConnectTimeout((int) Duration.ofSeconds(10).toMillis());
-            request.setReadTimeout((int) Duration.ofSeconds(30).toMillis());
+            // Ampliar timeouts para evitar cortes en generación/moderación
+            request.setConnectTimeout((int) Duration.ofSeconds(15).toMillis());
+            request.setReadTimeout((int) Duration.ofSeconds(90).toMillis());
 
             HttpResponse response = request.execute();
             String responseString = response.parseAsString();

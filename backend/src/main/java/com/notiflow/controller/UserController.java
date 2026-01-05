@@ -2,6 +2,7 @@ package com.notiflow.controller;
 
 import com.notiflow.dto.UserCreateRequest;
 import com.notiflow.dto.UserDto;
+import com.notiflow.dto.UserUpdateRequest;
 import com.notiflow.service.UserService;
 import com.notiflow.service.AccessControlService;
 import com.notiflow.util.CurrentUser;
@@ -41,6 +42,13 @@ public class UserController {
         CurrentUser current = CurrentUser.fromContext().orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
         accessControlService.check(current, "users.create", request.schoolId(), Optional.empty());
         return ResponseEntity.ok(userService.create(request));
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<UserDto> update(@PathVariable String id, @Valid @RequestBody UserUpdateRequest request) {
+        CurrentUser current = CurrentUser.fromContext().orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        accessControlService.check(current, "users.update", request.schoolId(), Optional.empty());
+        return ResponseEntity.ok(userService.update(id, request));
     }
 
     @DeleteMapping("/{id}")

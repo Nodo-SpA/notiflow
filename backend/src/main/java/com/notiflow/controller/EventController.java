@@ -40,4 +40,12 @@ public class EventController {
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
         return ResponseEntity.ok(eventService.create(request, user));
     }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(@PathVariable String id) {
+        CurrentUser user = CurrentUser.fromContext()
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        eventService.delete(id, user);
+        return ResponseEntity.noContent().build();
+    }
 }

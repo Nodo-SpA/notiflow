@@ -84,7 +84,12 @@ public class AiController {
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
         String targetSchool = (schoolId == null || schoolId.isBlank()) ? user.schoolId() : schoolId;
         if (targetSchool == null) targetSchool = "global";
-        accessControlService.check(user, "schools.manage", targetSchool, Optional.empty());
+        try {
+            accessControlService.check(user, "schools.manage", targetSchool, Optional.empty());
+        } catch (org.springframework.web.server.ResponseStatusException ex) {
+            // Permitir lectura de política a quienes pueden crear mensajes del colegio
+            accessControlService.check(user, "messages.create", targetSchool, Optional.empty());
+        }
         return ResponseEntity.ok(aiPolicyService.getPolicy(targetSchool));
     }
 

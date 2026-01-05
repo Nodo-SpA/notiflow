@@ -9,11 +9,29 @@ import 'package:url_launcher/url_launcher.dart';
 import 'firebase_options.dart';
 
 const String apiBase = 'https://notiflow-backend-179964029864.us-central1.run.app';
-const Color kPrimary = Color(0xFF0EA5E9); // celeste vibrante
+const Color kPrimary = Color(0xFFFF6B00); // naranjo principal del logo
 const Color kSecondary = Color(0xFF0F172A); // gris azulado profundo
-const Color kAccent = Color(0xFFF1F5F9); // gris hielo
-const Color kGlow = Color(0xFF67E8F9); // brillo aqua
+const Color kAccent = Color(0xFFFFF6ED); // marfil cálido
+const Color kGlow = Color(0xFFFF9E3D); // degradado ámbar
 const Duration kTimeout = Duration(seconds: 15);
+
+class StudentOption {
+  final String id;
+  final String name;
+  final String schoolId;
+  final String? schoolName;
+
+  StudentOption({required this.id, required this.name, required this.schoolId, this.schoolName});
+
+  factory StudentOption.fromJson(Map<String, dynamic> json) {
+    return StudentOption(
+      id: json['studentId'] as String? ?? '',
+      name: json['fullName'] as String? ?? '',
+      schoolId: json['schoolId'] as String? ?? '',
+      schoolName: json['schoolName'] as String?,
+    );
+  }
+}
 
 void main() {
   runApp(const NotiflowApp());
@@ -71,11 +89,23 @@ class _SplashScreenState extends State<SplashScreen> {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('authToken');
     final email = prefs.getString('userEmail');
+    final storedName = prefs.getString('userName');
+    final storedSchool = prefs.getString('schoolName');
+    final hasMultipleStudents = prefs.getBool('hasMultipleStudents') ?? false;
     if (!mounted) return;
     if (token != null && token.isNotEmpty && email != null && email.isNotEmpty) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => HomeShell(token: token, email: email)),
+        MaterialPageRoute(
+          builder: (_) => HomeShell(
+            token: token,
+            email: email,
+            userName: storedName,
+            studentName: storedName,
+            schoolName: storedSchool,
+            hasMultipleStudents: hasMultipleStudents,
+          ),
+        ),
       );
     } else {
       Navigator.pushReplacement(
@@ -113,12 +143,27 @@ class _LoginPageState extends State<LoginPage> {
   bool _loading = false;
   String? _error;
   bool _codeSent = false;
+  bool _needsStudentChoice = false;
+  List<StudentOption> _options = [];
+  String? _selectedStudentId;
+  String? _infoMessage;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _code.dispose();
+    super.dispose();
+  }
 
   Future<void> _requestCode() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() {
       _loading = true;
       _error = null;
+      _infoMessage = null;
+      _needsStudentChoice = false;
+      _options = [];
+      _selectedStudentId = null;
     });
     try {
       final res = await http.post(
@@ -127,7 +172,10 @@ class _LoginPageState extends State<LoginPage> {
         body: jsonEncode({'email': _email.text.trim()}),
       ).timeout(kTimeout);
       if (res.statusCode == 200) {
-        setState(() => _codeSent = true);
+        setState(() {
+          _codeSent = true;
+          _infoMessage = 'Te enviamos un código a tu correo. Revisa bandeja y spam.';
+        });
       } else {
         final msg = jsonDecode(res.body)['message'] ?? 'No se pudo enviar código';
         throw Exception(msg);
@@ -147,27 +195,88 @@ class _LoginPageState extends State<LoginPage> {
     setState(() {
       _loading = true;
       _error = null;
+      _infoMessage = null;
     });
     try {
+      if (_needsStudentChoice && _selectedStudentId == null) {
+        throw Exception('Selecciona a qué estudiante corresponde tu correo');
+      }
       final res = await http.post(
         Uri.parse('$apiBase/auth/otp/verify'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'email': _email.text.trim(), 'code': _code.text.trim()}),
+        body: jsonEncode({
+          'email': _email.text.trim(),
+          'code': _code.text.trim(),
+          'studentsOnly': true,
+          if (_selectedStudentId != null) 'studentId': _selectedStudentId,
+        }),
       ).timeout(kTimeout);
+      if (res.statusCode == 409) {
+        final body = jsonDecode(res.body);
+        final opts = (body['options'] as List<dynamic>? ?? [])
+            .map((e) => StudentOption.fromJson(e as Map<String, dynamic>))
+            .where((o) => o.id.isNotEmpty)
+            .toList();
+        setState(() {
+          _needsStudentChoice = true;
+          _options = opts;
+          _selectedStudentId = opts.isNotEmpty ? opts.first.id : null;
+          _error = null;
+          _infoMessage = 'Selecciona el estudiante para continuar';
+        });
+        return;
+      }
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         final token = data['token'] as String?;
         final email = _email.text.trim();
-        final name = data['name'] as String?;
+        final user = data['user'] as Map<String, dynamic>?;
+        final studentsRaw = (data['students'] as List<dynamic>? ?? []);
+        final students = studentsRaw
+            .map((e) => e is Map<String, dynamic> ? StudentOption.fromJson(e) : null)
+            .whereType<StudentOption>()
+            .toList();
+
+        if (_selectedStudentId == null && students.length > 1) {
+          // Si el backend no devolvió 409 pero hay varios alumnos, pedimos selección igual
+          setState(() {
+            _needsStudentChoice = true;
+            _options = students;
+            _selectedStudentId = students.first.id;
+            _infoMessage = 'Selecciona el estudiante/apoderado para continuar';
+          });
+          return;
+        }
+
+        final chosenStudent = _selectedStudentId != null
+            ? students.firstWhere((s) => s.id == _selectedStudentId, orElse: () => students.isNotEmpty ? students.first : StudentOption(id: '', name: '', schoolId: ''))
+            : (students.isNotEmpty ? students.first : StudentOption(id: '', name: '', schoolId: ''));
+        final name = (chosenStudent.name.isNotEmpty ? chosenStudent.name : null) ??
+            (user?['name'] as String?) ??
+            (data['name'] as String?);
+        final schoolName = chosenStudent.schoolName ?? user?['schoolName'] as String?;
+        final hasMultipleStudents = students.length > 1;
         if (token == null) throw Exception('Token faltante');
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('authToken', token);
         await prefs.setString('userEmail', email);
+        if (name != null) await prefs.setString('userName', name);
+        if (schoolName != null) await prefs.setString('schoolName', schoolName);
+        await prefs.setBool('hasMultipleStudents', hasMultipleStudents);
         await _registerDeviceToken(token, email);
         if (!mounted) return;
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => HomeShell(token: token, email: email, userName: name)),
+          MaterialPageRoute(
+            builder: (_) => HomeShell(
+              token: token,
+              email: email,
+              userName: name,
+              studentName: chosenStudent.name,
+              schoolName: schoolName,
+              hasMultipleStudents: hasMultipleStudents,
+            ),
+          ),
         );
       } else {
         final msg = jsonDecode(res.body)['message'] ??
@@ -201,119 +310,213 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: kAccent,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Center(
-            child: SingleChildScrollView(
+      backgroundColor: kSecondary,
+      body: Stack(
+        children: [
+          Positioned(
+            top: -120,
+            left: -80,
+            child: Container(
+              width: 260,
+              height: 260,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(colors: [kPrimary.withOpacity(0.35), kGlow.withOpacity(0.3)]),
+                boxShadow: [BoxShadow(color: kPrimary.withOpacity(0.18), blurRadius: 40, spreadRadius: 8)],
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -140,
+            right: -90,
+            child: Container(
+              width: 260,
+              height: 260,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(colors: [Colors.white.withOpacity(0.2), kGlow.withOpacity(0.28)]),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.notifications_active, size: 72, color: kPrimary),
-                  const SizedBox(height: 12),
-                  const Text('Notiflow',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: kSecondary)),
-                  const SizedBox(height: 8),
-                  const Text('Mensajería escolar unificada',
-                      textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)),
-                  const SizedBox(height: 24),
-                  if (_error != null)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade50,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(_error!, style: const TextStyle(color: Colors.red)),
-                    ),
-                  const SizedBox(height: 8),
                   Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.05),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Form(
-                      key: _formKey,
+                    padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: Colors.white.withOpacity(0.12)),
+                      ),
                       child: Column(
                         children: [
-                          TextFormField(
-                            controller: _email,
-                            keyboardType: TextInputType.emailAddress,
-                            decoration: const InputDecoration(
-                              labelText: 'Correo',
-                              prefixIcon: Icon(Icons.email_outlined),
-                            ),
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty) return 'Ingresa tu correo';
-                              final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+$');
-                              if (!emailRegex.hasMatch(v.trim())) return 'Correo inválido';
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                          if (_codeSent)
-                            TextFormField(
-                              controller: _code,
-                              keyboardType: TextInputType.number,
-                              maxLength: 6,
-                              decoration: const InputDecoration(
-                                labelText: 'Código',
-                                prefixIcon: Icon(Icons.pin),
-                                counterText: '',
-                              ),
-                              validator: (v) {
-                                if (!_codeSent) return null;
-                                if (v == null || v.trim().length < 4) return 'Ingresa el código';
-                                return null;
-                              },
-                            ),
-                          if (_codeSent) const SizedBox(height: 8),
-                          if (_codeSent)
-                            TextButton(
-                              onPressed: _loading
-                                  ? null
-                                  : () {
-                                      setState(() {
-                                        _codeSent = false;
-                                        _code.clear();
-                                        _error = null;
-                                      });
-                                    },
-                              child: const Text('Cancelar y volver a pedir código'),
-                            ),
-                          ElevatedButton.icon(
-                            icon: Icon(_codeSent ? Icons.verified : Icons.send),
-                            onPressed: _loading ? null : (_codeSent ? _verifyCode : _requestCode),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: kPrimary,
-                              foregroundColor: Colors.white,
-                              minimumSize: const Size.fromHeight(48),
-                            ),
-                            label: _loading
-                                ? const SizedBox(
-                                    width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                                : Text(_codeSent ? 'Validar código' : 'Enviar código'),
+                          Image.asset('assets/logos/NotiflowV_02.png', width: 170),
+                          const SizedBox(height: 6),
+                          const Text(
+                            'Comunicaciones inteligentes',
+                            style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600),
                           ),
                         ],
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 22),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.15),
+                            blurRadius: 25,
+                            offset: const Offset(0, 18),
+                          ),
+                        ],
+                      ),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Text(
+                              'Ingresa con tu correo',
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: kSecondary),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Te enviaremos un código para validar tu identidad.',
+                              style: TextStyle(color: Colors.black54, fontSize: 13),
+                            ),
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: _email,
+                              keyboardType: TextInputType.emailAddress,
+                              decoration: InputDecoration(
+                                labelText: 'Correo',
+                                prefixIcon: const Icon(Icons.email_outlined),
+                                filled: true,
+                                fillColor: kAccent,
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                              ),
+                              validator: (v) {
+                                if (v == null || v.trim().isEmpty) return 'Ingresa tu correo';
+                                final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+$');
+                                if (!emailRegex.hasMatch(v.trim())) return 'Correo inválido';
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            if (_codeSent)
+                              TextFormField(
+                                controller: _code,
+                                keyboardType: TextInputType.number,
+                                maxLength: 6,
+                                decoration: InputDecoration(
+                                  labelText: 'Código de 6 dígitos',
+                                  prefixIcon: const Icon(Icons.pin_rounded),
+                                  counterText: '',
+                                  filled: true,
+                                  fillColor: kAccent,
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                                ),
+                              ),
+                            if (_needsStudentChoice && _options.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              const Text(
+                                'Selecciona el estudiante asociado a tu correo:',
+                                style: TextStyle(fontWeight: FontWeight.w700, color: kSecondary),
+                              ),
+                              const SizedBox(height: 6),
+                              ..._options.map(
+                                (o) => RadioListTile<String>(
+                                  value: o.id,
+                                  groupValue: _selectedStudentId,
+                                  onChanged: _loading ? null : (v) => setState(() => _selectedStudentId = v),
+                                  dense: true,
+                                  title: Text(o.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                  subtitle: Text('Colegio: ${o.schoolName ?? o.schoolId}', style: const TextStyle(color: Colors.black54)),
+                                ),
+                              ),
+                            ],
+                            if (_error != null) ...[
+                              const SizedBox(height: 10),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(_error!, style: const TextStyle(color: Colors.red)),
+                              ),
+                            ],
+                            if (_infoMessage != null) ...[
+                              const SizedBox(height: 10),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: kAccent,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  _infoMessage!,
+                                  style: const TextStyle(color: kSecondary, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 16),
+                            ElevatedButton(
+                              onPressed: _loading ? null : (_codeSent ? _verifyCode : _requestCode),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: kPrimary,
+                                foregroundColor: Colors.white,
+                                minimumSize: const Size.fromHeight(50),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                shadowColor: kPrimary.withOpacity(0.35),
+                                elevation: 6,
+                              ),
+                              child: _loading
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                    )
+                                  : Text(_codeSent ? 'Validar código' : 'Enviar código'),
+                            ),
+                            if (_codeSent)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8.0),
+                                child: TextButton(
+                                  onPressed: _loading
+                                      ? null
+                                      : () {
+                                          setState(() {
+                                            _codeSent = false;
+                                            _needsStudentChoice = false;
+                                            _options = [];
+                                            _selectedStudentId = null;
+                                            _code.clear();
+                                            _infoMessage = null;
+                                            _error = null;
+                                          });
+                                        },
+                                  child: const Text('¿No llegó? Reintentar con otro código'),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -323,7 +526,18 @@ class HomeShell extends StatefulWidget {
   final String token;
   final String email;
   final String? userName;
-  const HomeShell({super.key, required this.token, required this.email, this.userName});
+  final String? studentName;
+  final String? schoolName;
+  final bool hasMultipleStudents;
+  const HomeShell({
+    super.key,
+    required this.token,
+    required this.email,
+    this.userName,
+    this.studentName,
+    this.schoolName,
+    this.hasMultipleStudents = false,
+  });
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -335,6 +549,10 @@ class _HomeShellState extends State<HomeShell> {
   void _logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('authToken');
+    await prefs.remove('userEmail');
+    await prefs.remove('userName');
+    await prefs.remove('schoolName');
+    await prefs.remove('hasMultipleStudents');
     if (!mounted) return;
     Navigator.pushAndRemoveUntil(
       context,
@@ -353,6 +571,10 @@ class _HomeShellState extends State<HomeShell> {
     final titles = ['Muro', 'Calendario', 'Mensajes'];
     final icons = [Icons.campaign_outlined, Icons.event, Icons.message_outlined];
 
+    final schoolLabel = widget.schoolName ??
+        (widget.hasMultipleStudents ? 'tus colegios' : 'tu colegio');
+    final displayName = widget.studentName ?? widget.userName ?? 'Cuenta';
+
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -361,20 +583,15 @@ class _HomeShellState extends State<HomeShell> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
               child: Row(
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(colors: [kPrimary, kGlow]),
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: kPrimary.withOpacity(0.35),
-                          blurRadius: 18,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      width: 46,
+                      height: 46,
+                      color: Colors.white,
+                      padding: const EdgeInsets.all(2),
+                      child: Image.asset('assets/logos/Naranjo_Degradado.png'),
                     ),
-                    child: const Icon(Icons.school, color: Colors.white, size: 22),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -382,11 +599,11 @@ class _HomeShellState extends State<HomeShell> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          widget.userName ?? 'Notiflow',
+                          'Notiflow para $schoolLabel',
                           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: kSecondary),
                         ),
                         Text(
-                          widget.email,
+                          displayName,
                           style: const TextStyle(fontSize: 12, color: Colors.black54),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -470,13 +687,21 @@ class _MuroPageState extends State<MuroPage> {
     });
     try {
       List<dynamic> data = [];
+      List<dynamic> _extractList(dynamic body) {
+        if (body is List) return body;
+        if (body is Map) {
+          final content = body['content'] ?? body['items'] ?? body['data'];
+          if (content is List) return content;
+        }
+        return [];
+      }
       // Intento principal: mensajes sin filtro (puede fallar por permisos)
       final res = await http.get(
         Uri.parse('$apiBase/messages'),
         headers: {'Authorization': 'Bearer ${widget.token}'},
       ).timeout(kTimeout);
       if (res.statusCode == 200) {
-        data = jsonDecode(res.body) as List<dynamic>;
+        data = _extractList(jsonDecode(res.body));
       } else {
         // Fallback: usar mensajes personales y filtrar los masivos
         final resSelf = await http.get(
@@ -484,7 +709,7 @@ class _MuroPageState extends State<MuroPage> {
           headers: {'Authorization': 'Bearer ${widget.token}'},
         ).timeout(kTimeout);
         if (resSelf.statusCode == 200) {
-          data = jsonDecode(resSelf.body) as List<dynamic>;
+          data = _extractList(jsonDecode(resSelf.body));
         } else {
           final msg = (() {
             try {
@@ -1008,15 +1233,23 @@ class _MessagesPageState extends State<MessagesPage> {
       _error = null;
     });
     try {
+      List<dynamic> _extractList(dynamic body) {
+        if (body is List) return body;
+        if (body is Map) {
+          final content = body['content'] ?? body['items'] ?? body['data'];
+          if (content is List) return content;
+        }
+        return [];
+      }
       final res = await http.get(
         Uri.parse('$apiBase/messages?self=true'),
         headers: {'Authorization': 'Bearer ${widget.token}'},
       );
       if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
+        final data = _extractList(jsonDecode(res.body));
         if (!mounted) return;
         setState(() {
-          _messages = data as List<dynamic>;
+          _messages = data;
           _loaded = _messages.length > _pageSize ? _pageSize : _messages.length;
         });
       } else {

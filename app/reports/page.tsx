@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { apiClient } from '@/lib/api-client';
@@ -15,6 +15,7 @@ type MessageReport = {
   appStatus?: string;
 };
 type UserLight = { id: string; email?: string };
+type StudentLight = { id: string; email?: string; guardians?: { email?: string }[]; guardianEmails?: string[] };
 
 const statusLabel = (status?: string) => {
   const s = (status || '').toLowerCase();
@@ -55,7 +56,9 @@ export default function ReportsPage() {
   const canCreateMessage = hasPermission('messages.create');
   const [messages, setMessages] = useState<MessageReport[]>([]);
   const [users, setUsers] = useState<UserLight[]>([]);
+  const [students, setStudents] = useState<StudentLight[]>([]);
   const [appActiveUsers, setAppActiveUsers] = useState<number | string>('—');
+  const [appActiveBySchool, setAppActiveBySchool] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -72,10 +75,47 @@ export default function ReportsPage() {
         const data = res.data || {};
         const items = (data as any).items ?? data ?? [];
         setMessages(items);
-        const userRes = await apiClient.getUsers();
-        setUsers(userRes.data || []);
+        const pageSize = 500;
+        const fetchAllUsers = async () => {
+          let page = 1;
+          const acc: UserLight[] = [];
+          while (true) {
+            const resUsers = await apiClient.getUsers({ page, pageSize });
+            const dataUsers = resUsers.data || {};
+            const itemsUsers = (dataUsers as any).items ?? dataUsers ?? [];
+            if (!Array.isArray(itemsUsers) || itemsUsers.length === 0) break;
+            acc.push(...itemsUsers);
+            const totalUsers = (dataUsers as any).total ?? itemsUsers.length;
+            if (acc.length >= totalUsers) break;
+            page++;
+          }
+          return acc;
+        };
+        const fetchAllStudents = async () => {
+          let page = 1;
+          const acc: StudentLight[] = [];
+          while (true) {
+            const resStudents = await apiClient.getStudents({
+              year: year || undefined,
+              page,
+              pageSize,
+            });
+            const dataStudents = resStudents.data || {};
+            const itemsStudents = (dataStudents as any).items ?? dataStudents ?? [];
+            if (!Array.isArray(itemsStudents) || itemsStudents.length === 0) break;
+            acc.push(...itemsStudents);
+            const totalStudents = (dataStudents as any).total ?? itemsStudents.length;
+            if (acc.length >= totalStudents) break;
+            page++;
+          }
+          return acc;
+        };
+        const [allUsers, allStudents] = await Promise.all([fetchAllUsers(), fetchAllStudents()]);
+        setUsers(allUsers);
+        setStudents(allStudents);
         const usageRes = await apiClient.getUsageMetrics();
         setAppActiveUsers(usageRes.data?.appActiveUsers ?? '—');
+        setAppActiveBySchool(usageRes.data?.appActiveBySchool ?? {});
       } catch (err: any) {
         const msg =
           err?.response?.data?.message ||
@@ -106,13 +146,36 @@ export default function ReportsPage() {
   const failedEmail = messages.filter((m) => (m.emailStatus || '').toLowerCase() === 'failed').length;
   const appPending = messages.filter((m) => (m.appStatus || '').toLowerCase() === 'pending').length;
   const appRead = messages.filter((m) => (m.appStatus || '').toLowerCase() === 'read').length;
-  const usersWithEmail = users.filter((u) => u.email).length;
-  const appActiveNumber =
-    typeof appActiveUsers === 'number'
-      ? appActiveUsers
-      : Number.isFinite(parseInt(appActiveUsers as any, 10))
-        ? parseInt(appActiveUsers as any, 10)
-        : 0;
+  const totalUsers = users.length;
+  const totalStudents = students.length;
+  const guardianEmailSet = useMemo(() => {
+    const set = new Set<string>();
+    students.forEach((s) => {
+      (s.guardianEmails || []).forEach((e) => {
+        if (e) set.add(e.toLowerCase());
+      });
+      (s.guardians || []).forEach((g) => {
+        if (g.email) set.add(g.email.toLowerCase());
+      });
+    });
+    return set;
+  }, [students]);
+  const guardiansWithEmail = guardianEmailSet.size;
+  const studentsWithEmail = students.filter((s) => s.email).length;
+  const studentsWithoutEmail = Math.max(0, totalStudents - studentsWithEmail);
+  const appActiveNumber = useMemo(() => {
+    const global =
+      typeof appActiveUsers === 'number'
+        ? appActiveUsers
+        : Number.isFinite(parseInt(appActiveUsers as any, 10))
+          ? parseInt(appActiveUsers as any, 10)
+          : 0;
+    const schoolId = (useAuthStore.getState().user?.schoolId || '').toLowerCase();
+    if (!schoolId) return global;
+    const perSchool = appActiveBySchool[schoolId] ?? appActiveBySchool[schoolId.toLowerCase()];
+    return perSchool ?? global;
+  }, [appActiveUsers, appActiveBySchool]);
+  const appActiveCapped = totalStudents === 0 || guardiansWithEmail === 0 ? 0 : appActiveNumber;
   const emailStatusCounts = (() => {
     const base = { sent: 0, failed: 0, other: 0 };
     messages.forEach((m) => {
@@ -135,6 +198,25 @@ export default function ReportsPage() {
     return base;
   })();
   const appSent = appStatusCounts.sent;
+  const weeklyUsage = useMemo(() => {
+    const counts = [0, 0, 0, 0]; // 0: semana actual, 1: hace 1 semana, etc.
+    const now = new Date();
+    messages.forEach((m) => {
+      const d = m.createdAt ? new Date(m.createdAt) : null;
+      if (!d || Number.isNaN(d.getTime())) return;
+      const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays < 0 || diffDays >= 28) return; // solo últimas 4 semanas
+      const bucket = Math.floor(diffDays / 7);
+      if (bucket >= 0 && bucket < 4) counts[bucket] += 1;
+    });
+    const labels = ['Semana actual', 'Hace 1 semana', 'Hace 2 semanas', 'Hace 3 semanas'];
+    const palette = ['#0ea5e9', '#8b5cf6', '#f97316', '#10b981'];
+    return counts.map((value, idx) => ({
+      label: labels[idx],
+      value,
+      color: palette[idx],
+    })).reverse(); // mostrar de la más antigua a la más reciente
+  }, [messages]);
 
   if (!canView) {
     return (
@@ -156,14 +238,6 @@ export default function ReportsPage() {
             <h1 className="text-4xl font-bold text-gray-900">Reportes</h1>
             <p className="text-gray-600 mt-1">Indicadores de envíos y uso (año {year})</p>
           </div>
-          {canCreateMessage && (
-            <Link
-              href="/messages/new"
-              className="inline-flex items-center justify-center rounded-lg bg-primary px-5 py-2.5 text-white font-medium hover:bg-primary-dark transition-colors"
-            >
-              + Crear campaña
-            </Link>
-          )}
         </div>
 
         {error && (
@@ -172,28 +246,55 @@ export default function ReportsPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard title="Mensajes (año)" value={loading ? '—' : total} />
-          <StatCard title="Email enviados" value={loading ? '—' : sentEmail} />
-          <StatCard title="Email fallidos" value={loading ? '—' : failedEmail} />
-          <StatCard title="App enviados" value={loading ? '—' : appSent} />
-          <StatCard title="App leídos" value={loading ? '—' : appRead} />
-          <StatCard title="Usuarios con email registrado" value={loading ? '—' : usersWithEmail} />
-          <StatCard title="Usuarios activos app" value={loading ? '—' : appActiveUsers} />
+        <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-gray-500">Mensajería</p>
+              <h2 className="text-lg font-semibold text-gray-900">Indicadores de envíos</h2>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard title="Mensajes (año)" value={loading ? '—' : total} />
+            <StatCard title="Email enviados" value={loading ? '—' : sentEmail} />
+            <StatCard title="Email fallidos" value={loading ? '—' : failedEmail} />
+            <StatCard title="App enviados" value={loading ? '—' : appSent} />
+            <StatCard title="App leídos" value={loading ? '—' : appRead} />
+          </div>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-gray-500">Usuarios</p>
+              <h2 className="text-lg font-semibold text-gray-900">Alcance de la plataforma</h2>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <StatCard title="Usuarios totales" value={loading ? '—' : totalUsers} />
+            <StatCard title="Estudiantes totales" value={loading ? '—' : totalStudents} />
+            <StatCard title="Estudiantes alcanzables (con email)" value={loading ? '—' : studentsWithEmail} />
+            <StatCard title="Estudiantes sin email" value={loading ? '—' : studentsWithoutEmail} />
+            <StatCard
+              title="Apoderados activos en la app (últimos 30 días)"
+              value={loading ? '—' : appActiveCapped}
+            />
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <ChartCard
-            title="Adopción App vs Colegio"
-            subtitle="Comparativo de personas totales vs activas en la app"
+            title="Uso semanal (últimas 4 semanas)"
+            subtitle="Mensajes enviados por semana"
+            data={weeklyUsage}
+          />
+          <ChartCard
+            title="Uso de la app en apoderados"
+            subtitle="Apoderados con email vs apoderados que usaron la app en los últimos 30 días"
             data={[
-              { label: 'Personas del colegio', value: users.length, color: '#0ea5e9' },
-              { label: 'Activos en app', value: appActiveNumber, color: '#10b981' },
+              { label: 'Apoderados con email', value: guardiansWithEmail, color: '#0ea5e9' },
+              { label: 'Apoderados activos en app (30 días)', value: appActiveCapped, color: '#10b981' },
             ]}
           />
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <ChartCard
             title="Estado Email"
             subtitle="Distribución por canal email"
@@ -213,99 +314,6 @@ export default function ReportsPage() {
               { label: 'No se usó este medio', value: appStatusCounts.other, color: '#94a3b8' },
             ]}
           />
-        </div>
-
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
-          <div className="flex flex-col gap-3 p-4 border-b border-gray-100">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-gray-900">Resumen de mensajes</h2>
-              <span className="text-sm text-gray-500">
-                {loading ? 'Cargando...' : `${paginated.length} mostrado(s)`}
-              </span>
-            </div>
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-                placeholder="Buscar por contenido o remitente"
-                className="w-full sm:w-96 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-              />
-              <div className="text-sm text-gray-600">
-                Mostrando {paginated.length} de {filtered.length} mensajes
-              </div>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full">
-              <thead className="bg-gray-50 text-left text-sm text-gray-600">
-                <tr>
-                  <th className="px-4 py-3">Mensaje</th>
-                  <th className="px-4 py-3">Enviado por</th>
-                  <th className="px-4 py-3">Canal Email</th>
-                  <th className="px-4 py-3">Canal App</th>
-                  <th className="px-4 py-3">Fecha</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 text-sm">
-                {paginated.map((m) => (
-                  <tr key={m.id} className="hover:bg-primary/5">
-                    <td className="px-4 py-3 text-gray-900 font-medium line-clamp-2">{m.content}</td>
-                    <td className="px-4 py-3 text-gray-700">{m.senderName || '—'}</td>
-                    <td className="px-4 py-3">
-                      {Array.isArray((m as any).channels) && (m as any).channels.includes('email') ? (
-                        <Badge status={m.emailStatus || '—'} />
-                      ) : (
-                        <span className="text-xs text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {Array.isArray((m as any).channels) && (m as any).channels.includes('app') ? (
-                        <Badge status={m.appStatus || '—'} />
-                      ) : (
-                        <span className="text-xs text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-500">
-                      {m.createdAt ? new Date(m.createdAt).toLocaleString() : '—'}
-                    </td>
-                  </tr>
-                ))}
-                {!loading && !filtered.length && (
-                  <tr>
-                    <td className="px-4 py-4 text-gray-500" colSpan={5}>
-                      No hay datos de mensajes todavía.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-3">
-          <button
-            type="button"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm disabled:opacity-50"
-          >
-            Anterior
-          </button>
-          <span className="text-sm text-gray-600">
-            Página {page} de {totalPages}
-          </span>
-          <button
-            type="button"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm disabled:opacity-50"
-          >
-            Siguiente
-          </button>
         </div>
       </div>
     </ProtectedLayout>

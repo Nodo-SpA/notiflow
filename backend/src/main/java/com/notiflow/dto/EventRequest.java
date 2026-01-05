@@ -13,7 +13,8 @@ public record EventRequest(
         Instant endDateTime,
         String type,
         String schoolId,
-        Audience audience
+        Audience audience,
+        String id // opcional: permite actualizar eventos existentes
 ) {
     public record Audience(
             List<String> userIds,

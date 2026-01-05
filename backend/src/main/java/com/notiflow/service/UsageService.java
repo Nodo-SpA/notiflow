@@ -8,6 +8,7 @@ import com.google.cloud.firestore.QuerySnapshot;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
@@ -51,10 +52,13 @@ public class UsageService {
     }
 
     public long countAppActiveUsers() {
+        Instant cutoff = Instant.now().minus(30, ChronoUnit.DAYS);
         try {
             ApiFuture<QuerySnapshot> query = firestore.collectionGroup("appLogins").get();
             List<QueryDocumentSnapshot> docs = query.get().getDocuments();
-            return docs.size();
+            return docs.stream()
+                    .filter(doc -> isRecent(doc, cutoff))
+                    .count();
         } catch (InterruptedException | ExecutionException e) {
             Thread.currentThread().interrupt();
             return 0;
@@ -76,10 +80,14 @@ public class UsageService {
 
     public java.util.Map<String, Long> countAppActiveBySchool() {
         java.util.Map<String, Long> counts = new java.util.HashMap<>();
+        Instant cutoff = Instant.now().minus(30, ChronoUnit.DAYS);
         try {
             ApiFuture<QuerySnapshot> query = firestore.collectionGroup("appLogins").get();
             List<QueryDocumentSnapshot> docs = query.get().getDocuments();
             for (QueryDocumentSnapshot doc : docs) {
+                if (!isRecent(doc, cutoff)) {
+                    continue;
+                }
                 String schoolId = doc.getString("schoolId");
                 if (schoolId == null || schoolId.isBlank()) {
                     schoolId = "desconocido";
@@ -95,5 +103,16 @@ public class UsageService {
     private com.google.cloud.firestore.CollectionReference tenantAppLogins(String tenantId) {
         String safeTenant = tenantId == null || tenantId.isBlank() ? "global" : tenantId;
         return firestore.collection("tenants").document(safeTenant).collection("appLogins");
+    }
+
+    private boolean isRecent(QueryDocumentSnapshot doc, Instant cutoff) {
+        String lastLogin = doc.getString("lastLogin");
+        if (lastLogin == null || lastLogin.isBlank()) return false;
+        try {
+            Instant ts = Instant.parse(lastLogin);
+            return !ts.isBefore(cutoff);
+        } catch (Exception e) {
+            return false;
+        }
     }
 }

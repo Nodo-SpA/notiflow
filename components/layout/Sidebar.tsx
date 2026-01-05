@@ -35,6 +35,7 @@ export const Sidebar: React.FC = () => {
     hasPermission('groups.update') ||
     hasPermission('groups.delete');
   const canSeeManagement = !isTeacherOrViewer && (canManageStudents || canManageGroups);
+  const canManageTeacherPerms = !isTeacherOrViewer && (hasPermission('users.create') || hasPermission('users.update'));
   const canSeeReports = hasPermission('reports.view');
   const canSeeSettings =
     !isTeacherOrViewer &&
@@ -80,10 +81,11 @@ export const Sidebar: React.FC = () => {
         submenu: [
           ...(canManageStudents ? [{ label: 'Estudiantes y Apoderados', href: '/management/students' }] : []),
           ...(canManageGroups ? [{ label: 'Grupos', href: '/management/groups' }] : []),
+          ...(canManageTeacherPerms ? [{ label: 'Permisos profesores', href: '/management/teacher-permissions' }] : []),
         ],
       },
       {
-        label: 'Reportes de Mensajes',
+        label: 'Reportes',
         href: '/reports',
         icon: FiBarChart2,
         hidden: !canSeeReports,

@@ -104,7 +104,9 @@ public class GroupService {
                 return new GroupListResponse(items, total, safePage, safeSize, hasMore);
             }
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error listando grupos", e);
         }
     }

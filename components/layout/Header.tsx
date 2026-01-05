@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
+import Image from 'next/image';
 import { Button } from '@/components/ui';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store';
@@ -17,11 +18,12 @@ import {
   FiBarChart2,
   FiSettings,
 } from 'react-icons/fi';
+import squareLogo from '@/logos/Naranjo_Degradado.png';
 
 export const Header: React.FC = () => {
   const router = useRouter();
   const { user, logout, hasPermission } = useAuthStore();
-  const { year, setYear } = useYearStore();
+  const { year } = useYearStore();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [schoolLogo, setSchoolLogo] = React.useState<string | null>(null);
   const role = (user?.role || '').toUpperCase();
@@ -59,7 +61,7 @@ export const Header: React.FC = () => {
               : []),
           ]
         : []),
-      ...(canSeeReports ? [{ label: 'Reportes de Mensajes', href: '/reports', icon: FiBarChart2 }] : []),
+      ...(canSeeReports ? [{ label: 'Reportes', href: '/reports', icon: FiBarChart2 }] : []),
       ...(canSeeSettings ? [{ label: 'Configuración', href: '/settings', icon: FiSettings }] : []),
     ],
     [
@@ -108,8 +110,8 @@ export const Header: React.FC = () => {
                 <img src={schoolLogo} alt="Logo colegio" className="w-full h-full object-cover" />
               </div>
             ) : (
-              <div className="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
-                <span className="text-white font-bold text-lg">N</span>
+              <div className="w-10 h-10 rounded-lg overflow-hidden border border-primary/30 bg-white">
+                <Image src={squareLogo} alt="Notiflow" className="w-full h-full object-cover" priority />
               </div>
             )}
             <div className="hidden sm:block">
@@ -122,23 +124,6 @@ export const Header: React.FC = () => {
           <div className="hidden sm:flex items-center gap-4">
             {user && (
               <>
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-gray-500">Año</label>
-                  <select
-                    value={year}
-                    onChange={(e) => setYear(e.target.value)}
-                    className="text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    {[0, 1].map((offset) => {
-                      const y = (new Date().getFullYear() + offset).toString();
-                      return (
-                        <option key={y} value={y}>
-                          {y}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
                 <div className="text-right">
                   <p className="text-sm font-medium text-gray-900">{user.name}</p>
                   <p className="text-xs text-gray-500 capitalize">{user.role}</p>
@@ -175,23 +160,6 @@ export const Header: React.FC = () => {
           <div className="sm:hidden pb-4 border-t border-gray-200 pt-4 space-y-4">
             {user && (
               <>
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-gray-500">Año</label>
-                  <select
-                    value={year}
-                    onChange={(e) => setYear(e.target.value)}
-                    className="text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-primary w-full"
-                  >
-                    {[0, 1].map((offset) => {
-                      const y = (new Date().getFullYear() + offset).toString();
-                      return (
-                        <option key={y} value={y}>
-                          {y}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
                 <div className="mb-4 text-sm">
                   <p className="font-medium text-gray-900">{user.name}</p>
                   <p className="text-xs text-gray-500 capitalize">{user.role}</p>

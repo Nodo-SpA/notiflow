@@ -5,6 +5,7 @@ import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { useEffect, useMemo, useState } from 'react';
 import { apiClient } from '@/lib/api-client';
 import { useAuthStore, useYearStore } from '@/store';
+import { FiSend, FiBarChart, FiBookOpen } from 'react-icons/fi';
 
 type MessageItem = { id: string; content: string; senderName: string; createdAt?: string; status?: string; recipients?: string[]; schoolId?: string };
 type UserItem = { id: string; role: string; schoolId?: string; schoolName?: string };
@@ -12,6 +13,9 @@ type SchoolItem = { id: string; name: string };
 
 export default function DashboardPage() {
   const { year } = useYearStore();
+  // Siempre trabajamos con el año calendario actual cuando no hay uno seleccionado explícitamente
+  const currentYear = new Date().getFullYear().toString();
+  const effectiveYear = year || currentYear;
   const hasPermission = useAuthStore((state) => state.hasPermission);
   const currentUser = useAuthStore((state) => state.user);
   const canCreateMessage = hasPermission('messages.create');
@@ -35,10 +39,10 @@ export default function DashboardPage() {
     const load = async () => {
       setLoading(true);
       try {
-        const msgPromise = apiClient.getMessages({ year });
+        const msgPromise = apiClient.getMessages({ year: effectiveYear });
         const usrPromise = canSeeUsers ? apiClient.getUsers() : Promise.resolve({ data: [] });
         const studentPromise = canSeeStudents
-          ? apiClient.getStudents({ page: 1, pageSize: 1 })
+          ? apiClient.getStudents({ page: 1, pageSize: 1, year: effectiveYear })
           : Promise.resolve({ data: { items: [], total: 0 } });
         const schPromise = isSuperAdmin ? apiClient.getSchools() : Promise.resolve({ data: [] });
         const usagePromise = isSuperAdmin ? apiClient.getUsageMetrics() : Promise.resolve({ data: {} });
@@ -66,13 +70,13 @@ export default function DashboardPage() {
       }
     };
     load();
-  }, [year, canSeeUsers, isSuperAdmin]);
+  }, [effectiveYear, canSeeUsers, isSuperAdmin]);
 
   const stats = useMemo(
     () => {
-      const base = [{ label: 'Mensajes del año', value: messages.length }];
+      const base = [{ label: `Mensajes ${effectiveYear}`, value: messages.length }];
       if (canSeeStudents) {
-        base.push({ label: 'Estudiantes', value: studentCount });
+        base.push({ label: `Estudiantes ${effectiveYear}`, value: studentCount });
       }
       if (canSeeUsers) {
         base.push({ label: 'Usuarios', value: users.length });
@@ -83,7 +87,7 @@ export default function DashboardPage() {
       }
       return base;
     },
-    [messages.length, users, canSeeUsers, canSeeStudents, studentCount]
+    [messages.length, users, canSeeUsers, canSeeStudents, studentCount, effectiveYear]
   );
 
   const schoolBreakdown = useMemo(() => {
@@ -138,6 +142,7 @@ export default function DashboardPage() {
           description: 'Crea y envía un mensaje a estudiantes, cursos o niveles',
           href: '/messages/new',
           color: 'bg-primary',
+          icon: FiSend,
         }
       : null,
     canSeeMessages
@@ -146,17 +151,19 @@ export default function DashboardPage() {
           description: 'Revisa el historial de mensajes enviados',
           href: '/messages',
           color: 'bg-blue-600',
+          icon: FiBookOpen,
         }
       : null,
     canSeeReports
       ? {
-          title: 'Reportes de Mensajes',
-          description: 'Revisa métricas de envíos',
+          title: 'Reportes',
+          description: 'Revisa métricas y desempeño',
           href: '/reports',
           color: 'bg-purple-600',
+          icon: FiBarChart,
         }
       : null,
-  ].filter(Boolean) as { title: string; description: string; href: string; color: string }[];
+  ].filter(Boolean) as { title: string; description: string; href: string; color: string; icon: any }[];
 
   return (
     <ProtectedLayout>
@@ -208,8 +215,8 @@ export default function DashboardPage() {
                 className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow group"
               >
                 <div className="flex items-start justify-between mb-4">
-                  <div className={`${action.color} p-3 rounded-lg`}>
-                    <div className="w-6 h-6 text-white">→</div>
+                  <div className={`${action.color} p-3 rounded-lg text-white flex items-center justify-center`}>
+                    <action.icon size={20} />
                   </div>
                   <div className="text-gray-400 group-hover:text-primary transition-colors">→</div>
                 </div>
@@ -243,11 +250,11 @@ export default function DashboardPage() {
                       <span className="font-bold">{loading ? '—' : s.admins}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Mensajes {year}</span>
+                      <span>Mensajes {effectiveYear}</span>
                       <span className="font-bold">{loading ? '—' : s.messages}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Activos en app</span>
+                      <span>Usuarios activos en la app (últimos 30 días)</span>
                       <span className="font-bold">{loading ? '—' : s.appActive}</span>
                     </div>
                   </div>

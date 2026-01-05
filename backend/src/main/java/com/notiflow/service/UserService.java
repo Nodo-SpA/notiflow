@@ -7,6 +7,7 @@ import com.google.cloud.firestore.QueryDocumentSnapshot;
 import com.google.cloud.firestore.QuerySnapshot;
 import com.notiflow.dto.UserCreateRequest;
 import com.notiflow.dto.UserDto;
+import com.notiflow.dto.UserUpdateRequest;
 import com.notiflow.model.UserDocument;
 import com.notiflow.model.UserRole;
 import com.notiflow.service.PasswordResetService.PasswordResetResult;
@@ -133,7 +134,8 @@ public class UserService {
         UserDocument doc = new UserDocument();
         doc.setName(request.name());
         doc.setEmail(request.email().toLowerCase());
-        doc.setPasswordHash(passwordEncoder.encode(request.password()));
+        String rawPassword = UUID.randomUUID().toString().replaceAll("-", "").substring(0, 12);
+        doc.setPasswordHash(passwordEncoder.encode(rawPassword));
         doc.setRole(request.role());
         doc.setSchoolId(request.schoolId());
         doc.setSchoolName(request.schoolName());
@@ -158,6 +160,44 @@ public class UserService {
                 saved.getSchoolName(),
                 saved.getRut()
         );
+    }
+
+    public UserDto update(String id, UserUpdateRequest request) {
+        try {
+            QueryDocumentSnapshot snap = firestore.collectionGroup("users")
+                    .whereEqualTo("id", id)
+                    .limit(1)
+                    .get()
+                    .get()
+                    .getDocuments()
+                    .stream()
+                    .findFirst()
+                    .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+            UserDocument doc = snap.toObject(UserDocument.class);
+            if (doc == null) {
+                throw new RuntimeException("Usuario no encontrado");
+            }
+            doc.setId(id);
+            doc.setName(request.name());
+            doc.setEmail(request.email().toLowerCase());
+            doc.setRole(request.role());
+            doc.setSchoolId(request.schoolId());
+            doc.setSchoolName(request.schoolName());
+            doc.setRut(request.rut());
+            upsert(doc);
+            return new UserDto(
+                    doc.getId(),
+                    doc.getName(),
+                    doc.getEmail(),
+                    doc.getRole(),
+                    doc.getSchoolId(),
+                    doc.getSchoolName(),
+                    doc.getRut()
+            );
+        } catch (InterruptedException | ExecutionException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Error actualizando usuario", e);
+        }
     }
 
     private com.google.cloud.firestore.CollectionReference tenantUsers(String tenantId) {

@@ -20,6 +20,7 @@ public record MessageDto(
         Map<String, MessageStatus> appStatuses,
         String schoolId,
         String year,
+        List<String> groupIds,
         MessageStatus status,
         Instant scheduledAt,
         Instant createdAt,

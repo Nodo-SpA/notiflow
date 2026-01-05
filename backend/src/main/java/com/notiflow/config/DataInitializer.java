@@ -15,14 +15,12 @@ public class DataInitializer {
     public ApplicationRunner seedDefaultUser(UserService userService) {
         return args -> {
             String adminEmail = System.getenv("APP_ADMIN_EMAIL");
-            String adminPassword = System.getenv("APP_ADMIN_PASSWORD");
             String adminSchoolId = System.getenv("APP_ADMIN_SCHOOL_ID");
             if (adminSchoolId == null || adminSchoolId.isBlank()) {
                 adminSchoolId = "global";
             }
-            if (StringUtils.hasText(adminEmail) && StringUtils.hasText(adminPassword)) {
+            if (StringUtils.hasText(adminEmail)) {
                 final String schoolIdFinal = adminSchoolId;
-                final String passwordFinal = adminPassword;
                 userService.findByEmail(adminEmail).orElseGet(() -> {
                     userService.create(
                             new UserCreateRequest(
@@ -31,7 +29,6 @@ public class DataInitializer {
                                     UserRole.ADMIN,
                                     schoolIdFinal,
                                     "Colegios",
-                                    passwordFinal,
                                     "11111111-1"
                             )
                     );

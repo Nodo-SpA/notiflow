@@ -22,8 +22,7 @@ type StudentItem = {
   commune?: string;
   email?: string;
   phone?: string;
-  guardianFirstName?: string;
-  guardianLastName?: string;
+  guardians?: { name?: string; email?: string; phone?: string }[];
 };
 
 export default function StudentsPage() {
@@ -63,8 +62,7 @@ export default function StudentsPage() {
     phone: '',
     commune: '',
     address: '',
-    guardianFirstName: '',
-    guardianLastName: '',
+    guardians: [] as { name?: string; email?: string; phone?: string }[],
     schoolId: isGlobalAdmin ? '' : user?.schoolId || '',
   });
 
@@ -141,8 +139,7 @@ export default function StudentsPage() {
       phone: '',
       commune: '',
       address: '',
-      guardianFirstName: '',
-      guardianLastName: '',
+      guardians: [],
       schoolId: isGlobalAdmin ? '' : user?.schoolId || '',
     });
   };
@@ -199,8 +196,7 @@ export default function StudentsPage() {
       phone: s.phone || '',
       commune: s.commune || '',
       address: s.address || '',
-      guardianFirstName: s.guardianFirstName || '',
-      guardianLastName: s.guardianLastName || '',
+      guardians: s.guardians || [],
       schoolId: isGlobalAdmin ? s.schoolId || '' : user?.schoolId || '',
     });
   };
@@ -274,7 +270,7 @@ export default function StudentsPage() {
                   <th className="px-4 py-3">Curso</th>
                   <th className="px-4 py-3">Año</th>
                   <th className="px-4 py-3">RUN</th>
-                  <th className="px-4 py-3">Apoderado</th>
+                  <th className="px-4 py-3">Apoderados</th>
                   <th className="px-4 py-3">Contacto</th>
                   {canUpdateStudents && <th className="px-4 py-3">Acciones</th>}
                 </tr>
@@ -289,7 +285,12 @@ export default function StudentsPage() {
                     <td className="px-4 py-3 text-gray-700">{s.year || '—'}</td>
                     <td className="px-4 py-3 text-gray-700">{s.run || '—'}</td>
                     <td className="px-4 py-3 text-gray-700">
-                      {`${s.guardianFirstName || ''} ${s.guardianLastName || ''}`.trim() || '—'}
+                      {s.guardians && s.guardians.length
+                        ? s.guardians
+                            .map((g) => g.name || g.email || 'Apoderado')
+                            .slice(0, 2)
+                            .join(', ') + (s.guardians.length > 2 ? ` +${s.guardians.length - 2}` : '')
+                        : '—'}
                     </td>
                     <td className="px-4 py-3 text-gray-600">
                       <div className="space-y-1">
@@ -445,33 +446,16 @@ export default function StudentsPage() {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Género</label>
-            <input
-              type="text"
+            <select
               value={studentForm.gender}
               onChange={(e) => setStudentForm((prev) => ({ ...prev, gender: e.target.value }))}
-              placeholder="Opcional"
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-            <input
-              type="email"
-              value={studentForm.email}
-              onChange={(e) => setStudentForm((prev) => ({ ...prev, email: e.target.value }))}
-              placeholder="correo@colegio.cl"
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Teléfono</label>
-            <input
-              type="text"
-              value={studentForm.phone}
-              onChange={(e) => setStudentForm((prev) => ({ ...prev, phone: e.target.value }))}
-              placeholder="+56 9 1234 5678"
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-            />
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 bg-white"
+            >
+              <option value="">Selecciona</option>
+              <option value="Masculino">Masculino</option>
+              <option value="Femenino">Femenino</option>
+              <option value="Prefiero no decirlo">Prefiero no decirlo</option>
+            </select>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Comuna</label>
@@ -491,25 +475,96 @@ export default function StudentsPage() {
               className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Apoderado (nombre)</label>
-            <input
-              type="text"
-              value={studentForm.guardianFirstName}
-              onChange={(e) => setStudentForm((prev) => ({ ...prev, guardianFirstName: e.target.value }))}
-              placeholder="Nombre apoderado"
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Apoderado (apellido)</label>
-            <input
-              type="text"
-              value={studentForm.guardianLastName}
-              onChange={(e) => setStudentForm((prev) => ({ ...prev, guardianLastName: e.target.value }))}
-              placeholder="Apellido apoderado"
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-            />
+          <div className="md:col-span-2 border border-gray-200 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Apoderados</label>
+                <p className="text-xs text-gray-500">Puedes agregar varios apoderados (nombre y correo)</p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setStudentForm((prev) => ({
+                    ...prev,
+                    guardians: [...(prev.guardians || []), { name: '', email: '', phone: '' }],
+                  }))
+                }
+                className="text-sm text-primary hover:text-primary/80 font-semibold"
+              >
+                + Agregar apoderado
+              </button>
+            </div>
+            <div className="space-y-2">
+              {(studentForm.guardians || []).map((g, idx) => (
+                <div key={idx} className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start border border-gray-100 rounded-lg p-2">
+                  <div>
+                    <input
+                      type="text"
+                      value={g.name || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setStudentForm((prev) => {
+                          const next = [...(prev.guardians || [])];
+                          next[idx] = { ...next[idx], name: val };
+                          return { ...prev, guardians: next };
+                        });
+                      }}
+                      placeholder="Nombre"
+                      className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="email"
+                      value={g.email || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setStudentForm((prev) => {
+                          const next = [...(prev.guardians || [])];
+                          next[idx] = { ...next[idx], email: val };
+                          return { ...prev, guardians: next };
+                        });
+                      }}
+                      placeholder="Correo"
+                      className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                      required
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={g.phone || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setStudentForm((prev) => {
+                          const next = [...(prev.guardians || [])];
+                          next[idx] = { ...next[idx], phone: val };
+                          return { ...prev, guardians: next };
+                        });
+                      }}
+                      placeholder="Teléfono"
+                      className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setStudentForm((prev) => {
+                          const next = [...(prev.guardians || [])];
+                          next.splice(idx, 1);
+                          return { ...prev, guardians: next };
+                        })
+                      }
+                      className="text-xs text-red-600 hover:underline whitespace-nowrap"
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {(!studentForm.guardians || studentForm.guardians.length === 0) && (
+                <p className="text-xs text-gray-500">Sin apoderados aún. Agrega al menos uno.</p>
+              )}
+            </div>
           </div>
           {isGlobalAdmin && (
             <div>

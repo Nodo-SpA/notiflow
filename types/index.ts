@@ -69,7 +69,7 @@ export interface SchoolConfig {
   adminUsers: User[];
 }
 
-export type EventType = 'general' | 'schedule';
+export type EventType = 'colegio' | 'evaluacion' | 'reunion' | 'general' | 'schedule';
 
 export interface EventAudience {
   userIds: string[];
@@ -85,7 +85,10 @@ export interface EventItem {
   type: EventType;
   schoolId?: string;
   createdBy?: string;
+  createdByEmail?: string;
   createdByName?: string;
   audience?: EventAudience;
+  audienceUserIds?: string[];
+  audienceGroupIds?: string[];
   createdAt?: string;
 }

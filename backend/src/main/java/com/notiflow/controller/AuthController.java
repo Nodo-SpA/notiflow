@@ -13,6 +13,7 @@ import com.notiflow.service.UsageService;
 import com.notiflow.service.AuthService;
 import com.notiflow.service.JwtService;
 import com.notiflow.service.PasswordResetService;
+import com.notiflow.service.MultiStudentMatchException;
 import io.jsonwebtoken.Claims;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
@@ -103,15 +104,32 @@ public class AuthController {
     }
 
     @PostMapping("/otp/verify")
-    public ResponseEntity<AuthResponse> verifyOtp(@Valid @RequestBody OtpVerifyRequest request) {
+    public ResponseEntity<?> verifyOtp(@Valid @RequestBody OtpVerifyRequest request) {
         boolean ok = otpService.verifyCode(request.email(), request.code());
         if (!ok) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "Código incorrecto o expirado. Solicita uno nuevo."));
         }
         // OTP válido, devolvemos un token como login con password
-        AuthResponse resp = authService.loginWithoutPassword(request.email());
-        // Solo contar login de app aquí
-        try { usageService.recordAppLogin(request.email()); } catch (Exception ignored) {}
-        return ResponseEntity.ok(resp);
+        try {
+            AuthResponse resp = authService.loginWithoutPassword(
+                    request.email(),
+                    request.studentId(),
+                    Boolean.TRUE.equals(request.studentsOnly())
+            );
+            // Solo contar login de app aquí
+            try { usageService.recordAppLogin(request.email()); } catch (Exception ignored) {}
+            return ResponseEntity.ok(resp);
+        } catch (MultiStudentMatchException ex) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                    java.util.Map.of(
+                            "message", ex.getMessage(),
+                            "options", ex.getOptions()
+                    )
+            );
+        } catch (Exception ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", ex.getMessage() != null ? ex.getMessage() : "No se pudo validar el código"));
+        }
     }
 }

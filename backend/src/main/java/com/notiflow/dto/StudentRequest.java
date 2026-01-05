@@ -1,6 +1,7 @@
 package com.notiflow.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import java.util.List;
 
 public record StudentRequest(
         String schoolId,
@@ -16,7 +17,8 @@ public record StudentRequest(
         String commune,
         String email,
         String phone,
-        String guardianFirstName,
-        String guardianLastName
+        String guardianFirstName, // deprecated: usar guardians
+        String guardianLastName,  // deprecated: usar guardians
+        List<GuardianContact> guardians
 ) {
 }

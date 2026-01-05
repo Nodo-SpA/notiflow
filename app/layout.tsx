@@ -5,7 +5,7 @@ export const metadata: Metadata = {
   title: 'Notiflow - Mensajería Escolar',
   description: 'Sistema de mensajería informativa para colegios',
   icons: {
-    icon: '/favicon.svg',
+    icon: '/Naranjo_Degradado.png',
   },
 };
 

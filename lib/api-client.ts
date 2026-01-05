@@ -36,6 +36,15 @@ class APIClient {
     );
   }
 
+  // Permisos profesores
+  async getTeacherPermissions() {
+    return (this.client as any).get('/teacher-permissions');
+  }
+
+  async updateTeacherPermission(email: string, data: { email: string; allowedGroupIds: string[] }) {
+    return (this.client as any).put(`/teacher-permissions/${encodeURIComponent(email)}`, data);
+  }
+
   // Autenticación
   async login(email: string, password: string) {
     return this.client.post('/auth/login', { email, password });
@@ -57,6 +66,7 @@ class APIClient {
     scheduleAt?: string;
     year?: string;
     reason?: string;
+    groupIds?: string[];
     attachments?: {
       fileName: string;
       mimeType: string;
@@ -65,7 +75,7 @@ class APIClient {
       cid?: string;
     }[];
   }) {
-    return this.client.post('/messages', data);
+    return this.client.post('/messages', data, { timeout: 120000 });
   }
 
   // Plantillas
@@ -119,8 +129,9 @@ class APIClient {
     commune?: string;
     email?: string;
     phone?: string;
-    guardianFirstName?: string;
-    guardianLastName?: string;
+    guardianFirstName?: string; // legacy
+    guardianLastName?: string; // legacy
+    guardians?: { name?: string; email?: string; phone?: string }[];
   }) {
     return this.client.post('/students', data);
   }
@@ -136,13 +147,14 @@ class APIClient {
       firstName: string;
       lastNameFather?: string;
       lastNameMother?: string;
-      address?: string;
-      commune?: string;
-      email?: string;
-      phone?: string;
-      guardianFirstName?: string;
-      guardianLastName?: string;
-    }
+    address?: string;
+    commune?: string;
+    email?: string;
+    phone?: string;
+    guardianFirstName?: string; // legacy
+    guardianLastName?: string; // legacy
+    guardians?: { name?: string; email?: string; phone?: string }[];
+  }
   ) {
     return this.client.put(`/students/${id}`, data);
   }
@@ -185,8 +197,9 @@ class APIClient {
     return this.client.get('/auth/me');
   }
 
-  async getUsers(role?: string) {
-    return this.client.get('/users', { params: { role } });
+  async getUsers(params?: string | { role?: string; page?: number; pageSize?: number; q?: string }) {
+    const requestParams = typeof params === 'string' ? { role: params } : params;
+    return this.client.get('/users', { params: requestParams });
   }
 
   async createUser(data: {
@@ -195,14 +208,32 @@ class APIClient {
     role: string;
     schoolId: string;
     schoolName: string;
-    password: string;
     rut: string;
   }) {
     return this.client.post('/users', data);
   }
 
+  async updateUser(id: string, data: {
+    name: string;
+    email: string;
+    role: string;
+    schoolId: string;
+    schoolName: string;
+    rut: string;
+  }) {
+    return this.client.put(`/users/${id}`, data);
+  }
+
   async deleteUser(id: string) {
     return this.client.delete(`/users/${id}`);
+  }
+
+  async requestOtp(email: string) {
+    return this.client.post('/auth/otp/request', { email });
+  }
+
+  async verifyOtp(email: string, code: string) {
+    return this.client.post('/auth/otp/verify', { email, code, studentsOnly: false });
   }
 
   async getSchools() {
@@ -224,9 +255,14 @@ class APIClient {
     startDateTime: string;
     endDateTime?: string;
     type?: string;
+    id?: string;
     audience?: { userIds?: string[]; groupIds?: string[] };
   }) {
     return this.client.post('/events', data);
+  }
+
+  async deleteEvent(id: string) {
+    return this.client.delete(`/events/${id}`);
   }
 
   async createGroup(data: {

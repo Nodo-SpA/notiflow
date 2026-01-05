@@ -1,6 +1,7 @@
 package com.notiflow.dto;
 
 import java.time.Instant;
+import java.util.List;
 
 public record StudentDto(
         String id,
@@ -16,8 +17,10 @@ public record StudentDto(
         String commune,
         String email,
         String phone,
-        String guardianFirstName,
-        String guardianLastName,
+        String guardianFirstName, // deprecated
+        String guardianLastName,  // deprecated
+        List<GuardianContact> guardians,
+        List<String> guardianEmails,
         Instant createdAt,
         Instant updatedAt
 ) {

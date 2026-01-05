@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { apiClient } from '@/lib/api-client';
 import { useAuthStore } from '@/store';
-import { FiEye, FiEyeOff, FiUsers, FiDatabase, FiCpu, FiUpload, FiHome, FiChevronRight } from 'react-icons/fi';
+import { FiUsers, FiDatabase, FiCpu, FiUpload, FiHome, FiChevronRight } from 'react-icons/fi';
 import { Modal } from '@/components/ui';
 
 type UserListItem = {
@@ -31,6 +31,7 @@ export default function SettingsPage() {
   const canManageUsers =
     hasPermission('users.create') ||
     hasPermission('users.delete');
+  const canUpdateUsers = hasPermission('users.update');
   const canManageSchools = hasPermission('schools.manage');
   const canManageAi = canManageSchools;
   const canAccessSettings = canManageUsers || canManageSchools;
@@ -48,7 +49,6 @@ export default function SettingsPage() {
     name: '',
     email: '',
     role: 'TEACHER',
-    password: '',
     schoolId: '',
     schoolName: '',
     rut: '',
@@ -61,13 +61,12 @@ export default function SettingsPage() {
   });
   const [editingSchool, setEditingSchool] = useState<SchoolItem | null>(null);
   const [logoFile, setLogoFile] = useState<File | null>(null);
-  const [showUserPassword, setShowUserPassword] = useState(false);
   const [csvInfo, setCsvInfo] = useState<{ fileName: string; rows: number }>({
     fileName: '',
     rows: 0,
   });
   const [csvData, setCsvData] = useState<
-    { name: string; email: string; role: string; password: string; rut: string }[]
+    { name: string; email: string; role: string; rut: string }[]
   >([]);
   const [savingUser, setSavingUser] = useState(false);
   const [savingSchool, setSavingSchool] = useState(false);
@@ -75,6 +74,7 @@ export default function SettingsPage() {
   const [userSearch, setUserSearch] = useState('');
   const [userToDelete, setUserToDelete] = useState<UserListItem | null>(null);
   const [deletingUser, setDeletingUser] = useState(false);
+  const [editingUser, setEditingUser] = useState<UserListItem | null>(null);
   const [aiPolicy, setAiPolicy] = useState({
     rewritePrompt: '',
     moderationRules: '',
@@ -98,16 +98,9 @@ export default function SettingsPage() {
   const [showAiModal, setShowAiModal] = useState(false);
   const [showImportUsersModal, setShowImportUsersModal] = useState(false);
   const [showImportStudentsModal, setShowImportStudentsModal] = useState(false);
-  const [showUserModal, setShowUserModal] = useState(false);
-  const [showSchoolModal, setShowSchoolModal] = useState(false);
-  const [showAiModal, setShowAiModal] = useState(false);
-  const [showImportUsersModal, setShowImportUsersModal] = useState(false);
-  const [showImportStudentsModal, setShowImportStudentsModal] = useState(false);
-  const [showUserModal, setShowUserModal] = useState(false);
-  const [showSchoolModal, setShowSchoolModal] = useState(false);
-  const [showAiModal, setShowAiModal] = useState(false);
-  const [showImportUsersModal, setShowImportUsersModal] = useState(false);
-  const [showImportStudentsModal, setShowImportStudentsModal] = useState(false);
+  const [showEditSchool, setShowEditSchool] = useState(false);
+  const [createLogoFile, setCreateLogoFile] = useState<File | null>(null);
+  const [aiSuccess, setAiSuccess] = useState('');
   const defaultRewritePrompt = `Mejora la redacción del siguiente mensaje manteniendo el significado.
 Adáptalo a un tono {tone}, claro y respetuoso. Devuelve solo el texto mejorado sin marcas adicionales.
 Mensaje original:
@@ -120,8 +113,7 @@ Información sensible no académica`;
   const availableRoles = useMemo(
     () => [
       { value: 'ADMIN', label: 'Admin' },
-      { value: 'DIRECTOR', label: 'Director' },
-      { value: 'COORDINATOR', label: 'Coordinador' },
+      { value: 'COORDINATOR', label: 'Gestión escolar' }, // unifica director/coordinador
       { value: 'TEACHER', label: 'Profesor' },
     ],
     []
@@ -142,7 +134,7 @@ Información sensible no académica`;
       }, [])
       .reverse()
       .join('');
-  return `${withDots}-${dv}`;
+    return `${withDots}-${dv}`;
   };
 
   useEffect(() => {
@@ -198,6 +190,7 @@ Información sensible no académica`;
   const loadAiPolicy = async () => {
     setLoadingAi(true);
     setError('');
+    setAiSuccess('');
     try {
       const res = await apiClient.getAiPolicy();
       const data = res.data;
@@ -223,6 +216,7 @@ Información sensible no académica`;
     e.preventDefault();
     setSavingAi(true);
     setError('');
+    setAiSuccess('');
     try {
       const rulesArr = aiPolicy.moderationRules
         .split('\n')
@@ -232,6 +226,7 @@ Información sensible no académica`;
         rewritePrompt: aiPolicy.rewritePrompt,
         moderationRules: rulesArr,
       });
+      setAiSuccess('Política de IA guardada correctamente.');
     } catch (err: any) {
       const msg =
         err?.response?.data?.message ||
@@ -297,6 +292,7 @@ Información sensible no académica`;
     try {
       if (!schoolForm.id || !schoolForm.name) {
         setError('Completa ID y nombre de la escuela');
+        setSavingSchool(false);
         return;
       }
       await apiClient.createSchool({
@@ -305,6 +301,21 @@ Información sensible no académica`;
         currentYear: schoolForm.currentYear || undefined,
         logoUrl: schoolForm.logoUrl || undefined,
       });
+      if (createLogoFile) {
+        try {
+          const res = await apiClient.uploadSchoolLogo(schoolForm.id.trim(), createLogoFile);
+          setSchoolForm((prev) => ({ ...prev, logoUrl: res.data?.logoUrl || prev.logoUrl }));
+        } catch (logoErr: any) {
+          const msg =
+            logoErr?.response?.data?.message ||
+            logoErr?.response?.data?.error ||
+            logoErr?.message ||
+            'Colegio creado, pero no se pudo subir el logo';
+          setError(msg);
+        } finally {
+          setCreateLogoFile(null);
+        }
+      }
       setSchoolForm({ id: '', name: '', currentYear: '', logoUrl: '' });
       await loadSchools();
     } catch (err: any) {
@@ -355,19 +366,19 @@ Información sensible no académica`;
       name: headers.indexOf('name'),
       email: headers.indexOf('email'),
       role: headers.indexOf('role'),
-      password: headers.indexOf('password'),
       rut: headers.indexOf('rut'),
     };
-    if (idx.name === -1 || idx.email === -1 || idx.role === -1 || idx.password === -1 || idx.rut === -1) {
-      throw new Error('CSV debe tener columnas: name,email,role,password,rut');
+    if (idx.name === -1 || idx.email === -1 || idx.role === -1 || idx.rut === -1) {
+      throw new Error('CSV debe tener columnas: name,email,role,rut');
     }
     return rows.map((row) => {
       const cols = row.split(',').map((c) => c.trim());
+      const rawRole = (cols[idx.role] || 'TEACHER').toUpperCase();
+      const normalizedRole = rawRole === 'DIRECTOR' ? 'COORDINATOR' : rawRole;
       return {
         name: cols[idx.name] || '',
         email: cols[idx.email] || '',
-        role: cols[idx.role] || 'TEACHER',
-        password: cols[idx.password] || '',
+        role: normalizedRole,
         rut: cols[idx.rut] || '',
       };
     });
@@ -395,11 +406,11 @@ Información sensible no académica`;
     setImportingCsv(true);
     setError('');
     try {
-      const schoolId = isGlobalAdmin ? schoolForm.id || userForm.schoolId : user?.schoolId;
+      const schoolId = isGlobalAdmin ? schoolForm.id || userForm.schoolId : user?.schoolId || userForm.schoolId;
       const schoolName =
         isGlobalAdmin
-          ? schoolForm.name || schools.find((s) => s.id === schoolId)?.name || ''
-          : user?.schoolName || '';
+          ? schoolForm.name || userForm.schoolName || schools.find((s) => s.id === schoolId)?.name || ''
+          : user?.schoolName || userForm.schoolName;
       if (!schoolId) {
         setError('Define el colegio (ID) para importar usuarios');
         return;
@@ -414,12 +425,12 @@ Información sensible no académica`;
         }
       }
       for (const row of csvData) {
-        if (!row.email || !row.password || !row.name || !row.rut) continue;
+        if (!row.email || !row.name || !row.rut) continue;
+        const normalizedRole = (row.role || '').toUpperCase() === 'DIRECTOR' ? 'COORDINATOR' : row.role || 'TEACHER';
         await apiClient.createUser({
           name: row.name,
           email: row.email,
-          role: row.role || 'TEACHER',
-          password: row.password,
+          role: normalizedRole,
           rut: row.rut,
           schoolId,
           schoolName: schoolName || 'Colegio',
@@ -479,9 +490,9 @@ Información sensible no académica`;
     );
   }, [userSearch, users]);
 
-  const handleCreateUser = async (e: React.FormEvent) => {
+  const handleCreateOrUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canCreateUsers) return;
+    if (!canCreateUsers && !canUpdateUsers) return;
     setSavingUser(true);
     setError('');
     try {
@@ -502,24 +513,34 @@ Información sensible no académica`;
         return;
       }
 
-      await apiClient.createUser({
-        name: userForm.name,
-        email: userForm.email,
-        role: userForm.role,
-        password: userForm.password,
-        rut: userForm.rut,
-        schoolId,
-        schoolName: schoolName || 'Colegio',
-      });
+      if (editingUser) {
+        await apiClient.updateUser(editingUser.id, {
+          name: userForm.name,
+          email: userForm.email,
+          role: userForm.role,
+          rut: userForm.rut,
+          schoolId,
+          schoolName: schoolName || 'Colegio',
+        });
+      } else {
+        await apiClient.createUser({
+          name: userForm.name,
+          email: userForm.email,
+          role: userForm.role,
+          rut: userForm.rut,
+          schoolId,
+          schoolName: schoolName || 'Colegio',
+        });
+      }
       setUserForm({
         name: '',
         email: '',
         role: 'TEACHER',
-        password: '',
         rut: '',
         schoolId: isGlobalAdmin ? '' : schoolId,
         schoolName: isGlobalAdmin ? '' : schoolName,
       });
+      setEditingUser(null);
       await loadUsers();
     } catch (err: any) {
       const msg =
@@ -551,9 +572,7 @@ Información sensible no académica`;
           <div>
             <p className="text-sm text-gray-500">Preferencias</p>
             <h1 className="text-4xl font-bold text-gray-900">Configuración</h1>
-            <p className="text-gray-600 mt-1">
-              Gestiona la configuración de tu institución
-            </p>
+            <p className="text-gray-600 mt-1">Gestiona la configuración de tu institución</p>
           </div>
           <Link href="/dashboard" className="text-primary hover:text-green-800 transition-colors">
             ← Volver al dashboard
@@ -566,344 +585,185 @@ Información sensible no académica`;
           </div>
         )}
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {canManageUsers && (
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Usuarios y Roles</h2>
-                  <p className="text-sm text-gray-600">
-                    Crea y administra usuarios dentro de tu colegio
-                  </p>
-                </div>
-                <div className="flex flex-col gap-2 items-end">
-                  <input
-                    type="search"
-                    value={userSearch}
-                    onChange={(e) => setUserSearch(e.target.value)}
-                    placeholder="Buscar por nombre, email o rol"
-                    className="w-64 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                  />
-                  <span className="text-xs text-gray-500">
-                    {filteredUsers.length} resultado(s)
-                  </span>
-                </div>
+            <button
+              type="button"
+              onClick={() => setShowUserModal(true)}
+              className="group bg-white border border-gray-200 rounded-xl p-5 text-left shadow-sm hover:shadow-md transition-all flex items-start gap-3"
+            >
+              <div className="p-2.5 bg-primary/10 rounded-lg text-primary">
+                <FiUsers size={20} />
               </div>
-
-              {canCreateUsers && (
-                <form className="grid grid-cols-1 md:grid-cols-2 gap-4" onSubmit={handleCreateUser}>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Nombre</label>
-                    <input
-                      type="text"
-                      value={userForm.name}
-                      onChange={(e) => setUserForm((prev) => ({ ...prev, name: e.target.value }))}
-                      className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                      required
-                    />
-                  </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                  <input
-                    type="email"
-                    value={userForm.email}
-                    onChange={(e) => setUserForm((prev) => ({ ...prev, email: e.target.value }))}
-                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                    required
-                  />
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-gray-900">Usuarios y roles</h3>
+                  <FiChevronRight className="text-gray-400 group-hover:text-primary" />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">RUT</label>
-                  <input
-                    type="text"
-                    value={userForm.rut}
-                    onChange={(e) =>
-                      setUserForm((prev) => ({
-                        ...prev,
-                        rut: formatRut(e.target.value),
-                      }))
-                    }
-                    placeholder="12.345.678-9"
-                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Rol</label>
-                  <select
-                    value={userForm.role}
-                    onChange={(e) => setUserForm((prev) => ({ ...prev, role: e.target.value }))}
-                      className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 bg-white"
-                    >
-                      {availableRoles.map((r) => (
-                        <option key={r.value} value={r.value}>
-                          {r.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Contraseña</label>
-                    <div className="relative">
-                      <input
-                        type={showUserPassword ? 'text' : 'password'}
-                        value={userForm.password}
-                        onChange={(e) => setUserForm((prev) => ({ ...prev, password: e.target.value }))}
-                        className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 pr-10"
-                        required
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowUserPassword((p) => !p)}
-                        className="absolute inset-y-0 right-2 flex items-center text-gray-500 hover:text-primary"
-                        aria-label="Mostrar contraseña"
-                      >
-                        {showUserPassword ? <FiEyeOff size={18} /> : <FiEye size={18} />}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="md:col-span-1">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Colegio</label>
-                    {isGlobalAdmin ? (
-                      <select
-                        value={userForm.schoolId}
-                        onChange={(e) =>
-                          setUserForm((prev) => ({ ...prev, schoolId: e.target.value }))
-                        }
-                        className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 bg-white"
-                      >
-                        <option value="">Selecciona colegio</option>
-                        {schools.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.name} ({s.id})
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={user?.schoolName || user?.schoolId || ''}
-                        disabled
-                        className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-100 text-gray-600"
-                      />
-                    )}
-                  </div>
-                  {isGlobalAdmin && (
-                    <div className="md:col-span-1">
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Nombre del colegio
-                      </label>
-                      <input
-                        type="text"
-                        value={userForm.schoolName}
-                        onChange={(e) =>
-                          setUserForm((prev) => ({ ...prev, schoolName: e.target.value }))
-                        }
-                        placeholder="Solo si el colegio no está en la lista"
-                        className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                      />
-                    </div>
-                  )}
-                  <div className="md:col-span-2 flex justify-end">
-                    <button
-                      type="submit"
-                      disabled={savingUser}
-                      className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors disabled:opacity-60"
-                    >
-                      {savingUser ? 'Guardando...' : 'Crear usuario'}
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              <div className="border-t border-gray-200 pt-4">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-lg font-semibold text-gray-900">Usuarios</h3>
-                  {loadingUsers && <span className="text-sm text-gray-500">Cargando...</span>}
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="bg-gray-50 text-left text-gray-600">
-                        <th className="px-3 py-2">Nombre</th>
-                        <th className="px-3 py-2">Email</th>
-                        <th className="px-3 py-2">RUT</th>
-                        <th className="px-3 py-2">Rol</th>
-                        <th className="px-3 py-2">Colegio</th>
-                        <th className="px-3 py-2 text-right">Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {filteredUsers.map((u) => (
-                        <tr key={u.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-2 font-medium text-gray-900">{u.name}</td>
-                          <td className="px-3 py-2 text-gray-700">{u.email}</td>
-                          <td className="px-3 py-2 text-gray-700">{u.rut || '—'}</td>
-                          <td className="px-3 py-2 text-gray-700">{u.role}</td>
-                          <td className="px-3 py-2 text-gray-700">
-                            {u.schoolName || u.schoolId}
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            <div className="flex justify-end">
-                              {canDeleteUsers && (
-                                <button
-                                  type="button"
-                                  onClick={() => openDeleteModal(u)}
-                                  className="text-xs text-red-600 hover:underline"
-                                >
-                                  Eliminar
-                                </button>
-                              )}
-                            </div>
-                         </td>
-                       </tr>
-                      ))}
-                      {!users.length && (
-                        <tr>
-                          <td className="px-3 py-3 text-gray-500" colSpan={4}>
-                            No hay usuarios aún.
-                          </td>
-                        </tr>
-                      )}
-                      {users.length > 0 && !filteredUsers.length && (
-                        <tr>
-                          <td className="px-3 py-3 text-gray-500" colSpan={5}>
-                            Sin coincidencias para la búsqueda.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                <p className="text-sm text-gray-600">Alta/baja y permisos del equipo</p>
               </div>
-            </div>
+            </button>
           )}
 
           {canManageSchools && isGlobalAdmin && (
-            <>
-              <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Colegios</h2>
-                  <p className="text-sm text-gray-600">Gestiona la lista de colegios</p>
-                </div>
-                  {loadingSchools && <span className="text-sm text-gray-500">Cargando...</span>}
-                </div>
-                <form className="grid grid-cols-1 md:grid-cols-3 gap-4" onSubmit={handleCreateSchool}>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">ID</label>
-                    <input
-                      type="text"
-                      value={schoolForm.id}
-                      onChange={(e) => setSchoolForm((prev) => ({ ...prev, id: e.target.value }))}
-                      className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                      placeholder="ej: school-123"
-                      required
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Nombre</label>
-                    <input
-                      type="text"
-                      value={schoolForm.name}
-                      onChange={(e) => setSchoolForm((prev) => ({ ...prev, name: e.target.value }))}
-                      className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Año actual (opcional)</label>
-                    <input
-                      type="text"
-                      value={schoolForm.currentYear}
-                      onChange={(e) => setSchoolForm((prev) => ({ ...prev, currentYear: e.target.value }))}
-                      className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                      placeholder="2025"
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Logo (URL)</label>
-                    <input
-                      type="text"
-                      value={schoolForm.logoUrl}
-                      onChange={(e) => setSchoolForm((prev) => ({ ...prev, logoUrl: e.target.value }))}
-                      className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                      placeholder="https://ejemplo.com/logo.png"
-                    />
-                  </div>
-                  <div className="md:col-span-3 flex justify-end">
-                    <button
-                      type="submit"
-                      disabled={savingSchool}
-                      className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors disabled:opacity-60"
-                    >
-                      {savingSchool ? 'Guardando...' : 'Crear colegio'}
-                    </button>
-                  </div>
-                </form>
-
-                <div className="border-t border-gray-200 pt-4">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-2">Listado</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {schools.map((s) => (
-                      <div
-                        key={s.id}
-                        className="border border-gray-200 rounded-lg p-3 hover:shadow-sm transition-shadow flex items-center gap-3"
-                      >
-                        {s.logoUrl ? (
-                          <img src={s.logoUrl} alt={s.name} className="w-10 h-10 rounded object-cover border" />
-                        ) : (
-                          <div className="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-sm font-semibold text-gray-700">
-                            {s.name?.charAt(0) || '?'}
-                          </div>
-                        )}
-                        <div className="flex-1">
-                          <p className="text-sm font-semibold text-gray-900">{s.name}</p>
-                          <p className="text-xs text-gray-600">{s.id}</p>
-                          {s.currentYear && <p className="text-xs text-gray-500">Año: {s.currentYear}</p>}
-                        </div>
-                        <button
-                          type="button"
-                          className="text-xs text-primary hover:underline"
-                          onClick={() => {
-                            setEditingSchool(s);
-                            setShowEditSchool(true);
-                          }}
-                        >
-                          Editar
-                        </button>
-                      </div>
-                    ))}
-                    {!schools.length && (
-                      <div className="text-sm text-gray-500">No hay colegios registrados.</div>
-                    )}
-                  </div>
-                </div>
+            <button
+              type="button"
+              onClick={() => setShowSchoolModal(true)}
+              className="group bg-white border border-gray-200 rounded-xl p-5 text-left shadow-sm hover:shadow-md transition-all flex items-start gap-3"
+            >
+              <div className="p-2.5 bg-primary/10 rounded-lg text-primary">
+                <FiHome size={20} />
               </div>
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-gray-900">Colegios</h3>
+                  <FiChevronRight className="text-gray-400 group-hover:text-primary" />
+                </div>
+                <p className="text-sm text-gray-600">Identidad, logos y año académico</p>
+              </div>
+            </button>
+          )}
 
-            </>
+          {canManageUsers && (
+            <button
+              type="button"
+              onClick={() => setShowImportUsersModal(true)}
+              className="group bg-white border border-gray-200 rounded-xl p-5 text-left shadow-sm hover:shadow-md transition-all flex items-start gap-3"
+            >
+              <div className="p-2.5 bg-primary/10 rounded-lg text-primary">
+                <FiUpload size={20} />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-gray-900">Importar usuarios</h3>
+                  <FiChevronRight className="text-gray-400 group-hover:text-primary" />
+                </div>
+                <p className="text-sm text-gray-600">Carga masiva desde CSV</p>
+              </div>
+            </button>
           )}
 
           {canImportStudents && (
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900">Importar estudiantes (CSV)</h2>
-                  <p className="text-sm text-gray-600">
-                    Solo Superadmin. Carga alumnos para un colegio y se crean grupos “Todo el colegio” y por curso.
-                  </p>
-                </div>
-                <span className="text-xs text-gray-500">
-                  Encabezados esperados: Año, Curso, RUN, Genero, Nombres, Apellido Paterno, Apellido Materno, Direccion, Comuna Residencia, Email, Celular
-                </span>
+            <button
+              type="button"
+              onClick={() => setShowImportStudentsModal(true)}
+              className="group bg-white border border-gray-200 rounded-xl p-5 text-left shadow-sm hover:shadow-md transition-all flex items-start gap-3"
+            >
+              <div className="p-2.5 bg-primary/10 rounded-lg text-primary">
+                <FiDatabase size={20} />
               </div>
-              <form className="grid grid-cols-1 md:grid-cols-2 gap-4" onSubmit={handleImportStudents}>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Colegio destino</label>
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-gray-900">Importar estudiantes</h3>
+                  <FiChevronRight className="text-gray-400 group-hover:text-primary" />
+                </div>
+                <p className="text-sm text-gray-600">Superadmin: CSV con generación de grupos</p>
+              </div>
+            </button>
+          )}
+
+          {canManageAi && (
+            <button
+              type="button"
+              onClick={() => setShowAiModal(true)}
+              className="group bg-white border border-gray-200 rounded-xl p-5 text-left shadow-sm hover:shadow-md transition-all flex items-start gap-3"
+            >
+              <div className="p-2.5 bg-primary/10 rounded-lg text-primary">
+                <FiCpu size={20} />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-gray-900">Política de IA</h3>
+                  <FiChevronRight className="text-gray-400 group-hover:text-primary" />
+                </div>
+                <p className="text-sm text-gray-600">Prompt y reglas de moderación</p>
+              </div>
+            </button>
+          )}
+        </div>
+      </div>
+
+      <Modal
+        isOpen={showUserModal}
+        title="Usuarios y roles"
+        onClose={() => setShowUserModal(false)}
+        cancelText="Cerrar"
+        size="xl"
+      >
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <input
+                type="search"
+                value={userSearch}
+                onChange={(e) => setUserSearch(e.target.value)}
+                placeholder="Buscar por nombre, email o rol"
+                className="w-72 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+              />
+              <span className="text-xs text-gray-500">{filteredUsers.length} resultado(s)</span>
+            </div>
+            {loadingUsers && <span className="text-xs text-gray-500">Cargando usuarios...</span>}
+          </div>
+
+          {(canCreateUsers || canUpdateUsers) && (
+            <form className="grid grid-cols-1 md:grid-cols-2 gap-4 border border-gray-100 rounded-lg p-4" onSubmit={handleCreateOrUpdateUser}>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nombre</label>
+                <input
+                  type="text"
+                  value={userForm.name}
+                  onChange={(e) => setUserForm((prev) => ({ ...prev, name: e.target.value }))}
+                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={userForm.email}
+                  onChange={(e) => setUserForm((prev) => ({ ...prev, email: e.target.value }))}
+                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">RUT</label>
+                <input
+                  type="text"
+                  value={userForm.rut}
+                  onChange={(e) =>
+                    setUserForm((prev) => ({
+                      ...prev,
+                      rut: formatRut(e.target.value),
+                    }))
+                  }
+                  placeholder="12.345.678-9"
+                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Rol</label>
+                <select
+                  value={userForm.role}
+                  onChange={(e) => setUserForm((prev) => ({ ...prev, role: e.target.value }))}
+                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 bg-white"
+                >
+                  {availableRoles.map((r) => (
+                    <option key={r.value} value={r.value}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Colegio</label>
+                {isGlobalAdmin ? (
                   <select
-                    value={importSchoolId}
-                    onChange={(e) => setImportSchoolId(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                    value={userForm.schoolId}
+                    onChange={(e) => setUserForm((prev) => ({ ...prev, schoolId: e.target.value }))}
+                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 bg-white"
                   >
                     <option value="">Selecciona colegio</option>
                     {schools.map((s) => (
@@ -912,132 +772,492 @@ Información sensible no académica`;
                       </option>
                     ))}
                   </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Archivo CSV</label>
+                ) : (
                   <input
-                    type="file"
-                    accept=".csv,text/csv"
-                    onChange={(e) => setImportFile(e.target.files?.[0] || null)}
-                    className="w-full text-sm"
+                    type="text"
+                    value={user?.schoolName || user?.schoolId || ''}
+                    disabled
+                    className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-100 text-gray-600"
                   />
-                  {importFile && (
-                    <p className="text-xs text-gray-600 mt-1">{importFile.name}</p>
-                  )}
-                </div>
-                <div className="md:col-span-2 flex gap-3 items-center">
-                  <button
-                    type="submit"
-                    disabled={importingStudents}
-                    className={`px-4 py-2 rounded-lg text-white font-semibold ${
-                      importingStudents ? 'bg-primary/70' : 'bg-primary hover:bg-primary-dark'
-                    } transition-colors`}
-                  >
-                    {importingStudents ? 'Importando...' : 'Importar estudiantes'}
-                  </button>
-                  <Link href="/management/students" className="text-sm text-primary hover:text-green-800 underline">
-                    Ver estudiantes
-                  </Link>
-                </div>
-              </form>
-              {importError && (
-                <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">
-                  {importError}
+                )}
+              </div>
+              {isGlobalAdmin && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del colegio</label>
+                  <input
+                    type="text"
+                    value={userForm.schoolName}
+                    onChange={(e) => setUserForm((prev) => ({ ...prev, schoolName: e.target.value }))}
+                    placeholder="Solo si el colegio no está en la lista"
+                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                  />
                 </div>
               )}
-              {importResult && (
-                <div className="p-3 bg-primary/10 border border-primary/30 text-primary text-sm rounded-lg space-y-1">
-                  <p>
-                    <strong>Procesadas:</strong> {importResult.processed} • <strong>Creadas:</strong> {importResult.created} • <strong>Actualizadas:</strong> {importResult.updated}
-                  </p>
-                  {importResult.errors && importResult.errors.length > 0 && (
-                    <details className="text-amber-800">
-                      <summary className="cursor-pointer">Errores ({importResult.errors.length})</summary>
-                      <ul className="list-disc list-inside">
-                        {importResult.errors.map((e, idx) => (
-                          <li key={idx}>{e}</li>
-                        ))}
-                      </ul>
-                    </details>
+              <div className="md:col-span-2 flex items-center justify-end gap-3">
+                {editingUser && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingUser(null);
+                      setUserForm({
+                        name: '',
+                        email: '',
+                        role: 'TEACHER',
+                        rut: '',
+                        schoolId: isGlobalAdmin ? '' : user?.schoolId || '',
+                        schoolName: isGlobalAdmin ? '' : user?.schoolName || '',
+                      });
+                    }}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancelar
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={savingUser}
+                  className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors disabled:opacity-60"
+                >
+                  {savingUser ? 'Guardando...' : editingUser ? 'Actualizar usuario' : 'Crear usuario'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div className="border-t border-gray-200 pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-semibold text-gray-900">Listado</h3>
+              {loadingUsers && <span className="text-sm text-gray-500">Cargando...</span>}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-left text-gray-600">
+                    <th className="px-3 py-2">Nombre</th>
+                    <th className="px-3 py-2">Email</th>
+                    <th className="px-3 py-2">RUT</th>
+                    <th className="px-3 py-2">Rol</th>
+                    <th className="px-3 py-2">Colegio</th>
+                    <th className="px-3 py-2 text-right">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {filteredUsers.map((u) => (
+                    <tr key={u.id} className="hover:bg-gray-50">
+                      <td className="px-3 py-2 font-medium text-gray-900">{u.name}</td>
+                      <td className="px-3 py-2 text-gray-700">{u.email}</td>
+                      <td className="px-3 py-2 text-gray-700">{u.rut || '—'}</td>
+                      <td className="px-3 py-2 text-gray-700">{u.role}</td>
+                      <td className="px-3 py-2 text-gray-700">{u.schoolName || u.schoolId}</td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="flex justify-end gap-3">
+                          {canUpdateUsers && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingUser(u);
+                                setUserForm({
+                                  name: u.name,
+                                  email: u.email,
+                                  role: u.role,
+                                  rut: u.rut || '',
+                                  schoolId: u.schoolId,
+                                  schoolName: u.schoolName || '',
+                                });
+                              }}
+                              className="text-xs text-primary hover:underline"
+                            >
+                              Editar
+                            </button>
+                          )}
+                          {canDeleteUsers && (
+                            <button
+                              type="button"
+                              onClick={() => openDeleteModal(u)}
+                              className="text-xs text-red-600 hover:underline"
+                            >
+                              Eliminar
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {!users.length && (
+                    <tr>
+                      <td className="px-3 py-3 text-gray-500" colSpan={6}>
+                        No hay usuarios aún.
+                      </td>
+                    </tr>
                   )}
+                  {users.length > 0 && !filteredUsers.length && (
+                    <tr>
+                      <td className="px-3 py-3 text-gray-500" colSpan={6}>
+                        Sin coincidencias para la búsqueda.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showSchoolModal && isGlobalAdmin}
+        title="Colegios"
+        onClose={() => setShowSchoolModal(false)}
+        cancelText="Cerrar"
+        size="xl"
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-600">Gestiona identificadores, nombre y logos</p>
+            {loadingSchools && <span className="text-xs text-gray-500">Cargando colegios...</span>}
+          </div>
+          <form className="grid grid-cols-1 md:grid-cols-3 gap-4 border border-gray-100 rounded-lg p-4" onSubmit={handleCreateSchool}>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">ID</label>
+              <input
+                type="text"
+                value={schoolForm.id}
+                onChange={(e) => setSchoolForm((prev) => ({ ...prev, id: e.target.value }))}
+                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                placeholder="ej: school-123"
+                required
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Nombre</label>
+              <input
+                type="text"
+                value={schoolForm.name}
+                onChange={(e) => setSchoolForm((prev) => ({ ...prev, name: e.target.value }))}
+                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Año actual (opcional)</label>
+              <input
+                type="text"
+                value={schoolForm.currentYear}
+                onChange={(e) => setSchoolForm((prev) => ({ ...prev, currentYear: e.target.value }))}
+                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                placeholder="2025"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Logo (URL)</label>
+              <input
+                type="text"
+                value={schoolForm.logoUrl}
+                onChange={(e) => setSchoolForm((prev) => ({ ...prev, logoUrl: e.target.value }))}
+                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                placeholder="https://ejemplo.com/logo.png"
+              />
+            </div>
+            <div className="md:col-span-3">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Logo (imagen)</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setCreateLogoFile(e.target.files?.[0] || null)}
+                className="w-full text-sm"
+              />
+              {createLogoFile && <p className="text-xs text-gray-600 mt-1">{createLogoFile.name}</p>}
+            </div>
+            <div className="md:col-span-3 flex justify-end">
+              <button
+                type="submit"
+                disabled={savingSchool}
+                className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors disabled:opacity-60"
+              >
+                {savingSchool ? 'Guardando...' : 'Crear colegio'}
+              </button>
+            </div>
+          </form>
+
+          <div className="border-t border-gray-200 pt-3">
+            <h3 className="text-md font-semibold text-gray-900 mb-2">Listado</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {schools.map((s) => (
+                <div
+                  key={s.id}
+                  className="border border-gray-200 rounded-lg p-3 hover:shadow-sm transition-shadow flex items-center gap-3"
+                >
+                  {s.logoUrl ? (
+                    <img src={s.logoUrl} alt={s.name} className="w-10 h-10 rounded object-cover border" />
+                  ) : (
+                    <div className="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-sm font-semibold text-gray-700">
+                      {s.name?.charAt(0) || '?'}
+                    </div>
+                  )}
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-gray-900">{s.name}</p>
+                    <p className="text-xs text-gray-600">{s.id}</p>
+                    {s.currentYear && <p className="text-xs text-gray-500">Año: {s.currentYear}</p>}
+                  </div>
+                  <button
+                    type="button"
+                    className="text-xs text-primary hover:underline"
+                    onClick={() => {
+                      setEditingSchool(s);
+                      setShowEditSchool(true);
+                    }}
+                  >
+                    Editar
+                  </button>
                 </div>
+              ))}
+              {!schools.length && <div className="text-sm text-gray-500">No hay colegios registrados.</div>}
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showImportUsersModal}
+        title="Importar usuarios (CSV)"
+        onClose={() => setShowImportUsersModal(false)}
+        cancelText="Cerrar"
+        size="lg"
+      >
+        <form className="space-y-4" onSubmit={handleImportCsv}>
+          <p className="text-sm text-gray-600">
+            Cabeceras requeridas: <strong>name, email, role, rut</strong>. Los usuarios se asociarán al colegio seleccionado.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Archivo CSV</label>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(e) => handleCsvFile(e.target.files?.[0] || null)}
+                className="w-full text-sm"
+              />
+              {csvInfo.fileName && (
+                <p className="text-xs text-gray-600 mt-1">
+                  {csvInfo.fileName} • {csvInfo.rows} fila(s)
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Colegio destino</label>
+              {isGlobalAdmin ? (
+                <select
+                  value={userForm.schoolId}
+                  onChange={(e) => setUserForm((prev) => ({ ...prev, schoolId: e.target.value }))}
+                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 bg-white"
+                >
+                  <option value="">Selecciona colegio</option>
+                  {schools.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.id})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={user?.schoolName || user?.schoolId || ''}
+                  disabled
+                  className="w-full px-3 py-2 border rounded-lg text-sm bg-gray-100 text-gray-600"
+                />
+              )}
+            </div>
+            {isGlobalAdmin && (
+              <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del colegio (si es nuevo)</label>
+                  <input
+                    type="text"
+                    value={userForm.schoolName}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setUserForm((prev) => ({ ...prev, schoolName: value }));
+                      setSchoolForm((prev) => ({ ...prev, name: value }));
+                    }}
+                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                    placeholder="Solo si no existe"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Crear colegio con ID</label>
+                  <input
+                    type="text"
+                    value={schoolForm.id}
+                    onChange={(e) => setSchoolForm((prev) => ({ ...prev, id: e.target.value }))}
+                    className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+                    placeholder="Opcional"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-gray-500">Se crearán usuarios válidos; filas vacías se omiten.</div>
+            <button
+              type="submit"
+              disabled={importingCsv}
+              className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors disabled:opacity-60"
+            >
+              {importingCsv ? 'Importando...' : 'Importar usuarios'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={showImportStudentsModal}
+        title="Importar estudiantes (CSV)"
+        onClose={() => setShowImportStudentsModal(false)}
+        cancelText="Cerrar"
+        size="xl"
+      >
+        <form className="space-y-4" onSubmit={handleImportStudents}>
+          <p className="text-sm text-gray-600">
+            Encabezados esperados: Año, Curso, RUN, Genero, Nombres, Apellido Paterno, Apellido Materno, Direccion, Comuna Residencia, Email, Celular.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Colegio destino</label>
+              <select
+                value={importSchoolId}
+                onChange={(e) => setImportSchoolId(e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+              >
+                <option value="">Selecciona colegio</option>
+                {schools.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.id})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Archivo CSV</label>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                className="w-full text-sm"
+              />
+              {importFile && <p className="text-xs text-gray-600 mt-1">{importFile.name}</p>}
+            </div>
+          </div>
+          <div className="flex gap-3 items-center">
+            <button
+              type="submit"
+              disabled={importingStudents}
+              className={`px-4 py-2 rounded-lg text-white font-semibold ${
+                importingStudents ? 'bg-primary/70' : 'bg-primary hover:bg-primary-dark'
+              } transition-colors`}
+            >
+              {importingStudents ? 'Importando...' : 'Importar estudiantes'}
+            </button>
+            <Link href="/management/students" className="text-sm text-primary hover:text-green-800 underline">
+              Ver estudiantes
+            </Link>
+          </div>
+          {importError && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">{importError}</div>
+          )}
+          {importResult && (
+            <div className="p-3 bg-primary/10 border border-primary/30 text-primary text-sm rounded-lg space-y-1">
+              <p>
+                <strong>Procesadas:</strong> {importResult.processed} • <strong>Creadas:</strong> {importResult.created} •{' '}
+                <strong>Actualizadas:</strong> {importResult.updated}
+              </p>
+              {importResult.errors && importResult.errors.length > 0 && (
+                <details className="text-amber-800">
+                  <summary className="cursor-pointer">Errores ({importResult.errors.length})</summary>
+                  <ul className="list-disc list-inside">
+                    {importResult.errors.map((e, idx) => (
+                      <li key={idx}>{e}</li>
+                    ))}
+                  </ul>
+                </details>
               )}
             </div>
           )}
+        </form>
+      </Modal>
 
-        </div>
-
-        {canManageAi && (
-          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900">Política de IA</h2>
-                <p className="text-sm text-gray-600">
-                  Define cómo la IA reescribe mensajes y qué reglas usa para moderar contenido.
-                </p>
-              </div>
-              {loadingAi && <span className="text-xs text-gray-500">Cargando...</span>}
-            </div>
-            <form className="space-y-4" onSubmit={handleSaveAi}>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Prompt de reescritura</label>
-                <textarea
-                  value={aiPolicy.rewritePrompt}
-                  onChange={(e) => setAiPolicy((p) => ({ ...p, rewritePrompt: e.target.value }))}
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 min-h-[140px]"
-                  placeholder={defaultRewritePrompt}
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Placeholders: {'{tone}'}, {'{texto}'} / {'{text}'}. Se inserta automáticamente según el mensaje.
-                </p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Reglas de moderación</label>
-                <textarea
-                  value={aiPolicy.moderationRules}
-                  onChange={(e) => setAiPolicy((p) => ({ ...p, moderationRules: e.target.value }))}
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 min-h-[120px]"
-                  placeholder={defaultRules}
-                />
-                <p className="text-xs text-gray-500 mt-1">Una regla por línea. La IA marcará como sensible si detecta estos temas.</p>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="text-xs text-gray-500">
-                  {aiPolicy.updatedBy && (
-                    <span>
-                      Última edición por {aiPolicy.updatedBy}{' '}
-                      {aiPolicy.updatedAt ? `(${new Date(aiPolicy.updatedAt).toLocaleString()})` : ''}
-                    </span>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setAiPolicy({
-                        rewritePrompt: defaultRewritePrompt,
-                        moderationRules: defaultRules,
-                        updatedBy: aiPolicy.updatedBy,
-                        updatedAt: aiPolicy.updatedAt,
-                      })
-                    }
-                    className="px-4 py-2 border border-gray-300 text-gray-800 rounded-lg text-sm hover:border-primary hover:text-primary"
-                  >
-                    Restablecer valores sugeridos
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={savingAi}
-                    className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors disabled:opacity-60"
-                  >
-                    {savingAi ? 'Guardando...' : 'Guardar política'}
-                  </button>
-                </div>
-              </div>
-            </form>
+      <Modal
+        isOpen={showAiModal}
+        title="Política de IA"
+        onClose={() => setShowAiModal(false)}
+        cancelText="Cerrar"
+        size="xl"
+      >
+        <form className="space-y-4" onSubmit={handleSaveAi}>
+          {loadingAi && <p className="text-xs text-gray-500">Cargando política...</p>}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Prompt de reescritura</label>
+            <textarea
+              value={aiPolicy.rewritePrompt}
+              onChange={(e) => setAiPolicy((p) => ({ ...p, rewritePrompt: e.target.value }))}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 min-h-[140px]"
+              placeholder={defaultRewritePrompt}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Placeholders: {'{tone}'}, {'{texto}'} / {'{text}'}. Se inserta automáticamente según el mensaje.
+            </p>
           </div>
-        )}
-      </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Reglas de moderación</label>
+            <textarea
+              value={aiPolicy.moderationRules}
+              onChange={(e) => setAiPolicy((p) => ({ ...p, moderationRules: e.target.value }))}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 min-h-[120px]"
+              placeholder={defaultRules}
+            />
+            <p className="text-xs text-gray-500 mt-1">Una regla por línea. La IA marcará como sensible si detecta estos temas.</p>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs text-gray-500">
+              {aiPolicy.updatedBy && (
+                <span>
+                  Última edición por {aiPolicy.updatedBy}{' '}
+                  {aiPolicy.updatedAt ? `(${new Date(aiPolicy.updatedAt).toLocaleString()})` : ''}
+                </span>
+              )}
+            </div>
+            {aiSuccess && (
+              <div className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                {aiSuccess}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setAiPolicy({
+                    rewritePrompt: defaultRewritePrompt,
+                    moderationRules: defaultRules,
+                    updatedBy: aiPolicy.updatedBy,
+                    updatedAt: aiPolicy.updatedAt,
+                  })
+                }
+                className="px-4 py-2 border border-gray-300 text-gray-800 rounded-lg text-sm hover:border-primary hover:text-primary"
+              >
+                Restablecer valores sugeridos
+              </button>
+              <button
+                type="submit"
+                disabled={savingAi}
+                className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition-colors disabled:opacity-60"
+              >
+                {savingAi ? 'Guardando...' : 'Guardar política'}
+              </button>
+            </div>
+          </div>
+        </form>
+      </Modal>
 
       <Modal
         isOpen={!!userToDelete}
@@ -1048,10 +1268,8 @@ Información sensible no académica`;
       >
         <p className="text-sm text-gray-700">
           ¿Seguro que deseas eliminar al usuario{' '}
-          <span className="font-semibold">
-            {userToDelete?.name || userToDelete?.email || 'sin nombre'}
-          </span>
-          ? Esta acción no se puede deshacer.
+          <span className="font-semibold">{userToDelete?.name || userToDelete?.email || 'sin nombre'}</span>? Esta acción
+          no se puede deshacer.
         </p>
       </Modal>
 
@@ -1125,9 +1343,7 @@ Información sensible no académica`;
                 onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
                 className="w-full text-sm"
               />
-              {logoFile && (
-                <p className="text-xs text-gray-600 mt-1">{logoFile.name}</p>
-              )}
+              {logoFile && <p className="text-xs text-gray-600 mt-1">{logoFile.name}</p>}
               <button
                 type="button"
                 onClick={handleUploadLogo}

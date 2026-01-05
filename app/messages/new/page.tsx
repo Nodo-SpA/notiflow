@@ -52,6 +52,7 @@ type StudentRecipient = {
   lastNameFather?: string;
   lastNameMother?: string;
   email?: string;
+  guardians?: { name?: string; email?: string; phone?: string }[];
   course?: string;
   year?: string;
 };
@@ -105,6 +106,10 @@ export default function NewMessagePage() {
   const [sendSuccess, setSendSuccess] = useState('');
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
   const [step, setStep] = useState(1);
+  const [moderationLoading, setModerationLoading] = useState(false);
+  const [aiPolicy, setAiPolicy] = useState<string>('');
+  const [aiBlocked, setAiBlocked] = useState(false);
+  const [aiUses, setAiUses] = useState(0);
   const [userPage, setUserPage] = useState(1);
   const userPageSize = 12;
   const [studentPage, setStudentPage] = useState(1);
@@ -112,6 +117,17 @@ export default function NewMessagePage() {
 
   useEffect(() => {
     if (!canCreate) return;
+    const loadPolicy = async () => {
+      try {
+        const res = await apiClient.getAiPolicy();
+        const rules = res?.data?.moderationRules;
+        if (Array.isArray(rules)) {
+          setAiPolicy(rules.join(' • '));
+        }
+      } catch {
+        // silencioso
+      }
+    };
     const loadUsers = async () => {
       setLoadingUsers(true);
       setUsersError('');
@@ -129,6 +145,7 @@ export default function NewMessagePage() {
         setLoadingUsers(false);
       }
     };
+    loadPolicy();
     loadUsers();
     const loadTemplates = async () => {
       setLoadingTemplates(true);
@@ -231,7 +248,10 @@ export default function NewMessagePage() {
     const studentEmails = selectedStudentIds
       .map((id) => studentCache[id]?.email)
       .filter((e): e is string => Boolean(e));
-    const emails: string[] = Array.from(new Set<string>([...userEmails, ...studentEmails]));
+    const guardianEmails = selectedStudentIds
+      .flatMap((id) => (studentCache[id]?.guardians || []).map((g) => g.email))
+      .filter((e): e is string => Boolean(e));
+    const emails: string[] = Array.from(new Set<string>([...userEmails, ...studentEmails, ...guardianEmails]));
     if (!emails.length) {
       setSendError('Selecciona al menos un usuario con correo.');
       return;
@@ -300,24 +320,91 @@ export default function NewMessagePage() {
         .split('{{fecha}}').join(now)
         .split('{{remitente}}').join(currentUser?.name ?? '');
     };
-    const finalContent = replaceTokens(messageContent);
-    const finalReason = replaceTokens(reason);
+  const finalContent = replaceTokens(messageContent);
+  const finalReason = replaceTokens(reason);
 
-    setSendLoading(true);
-    setSendError('');
-    setSendSuccess('');
-    const scheduleIso =
-      sendMode === 'schedule' && scheduleAt
-        ? new Date(scheduleAt).toISOString()
-        : undefined;
+  setSendLoading(true);
+  setModerationLoading(true);
+  setSendError('');
+  setSendSuccess('');
+  setModerationInfo('');
+  const scheduleIso =
+    sendMode === 'schedule' && scheduleAt
+      ? new Date(scheduleAt).toISOString()
+      : undefined;
 
-    apiClient
-      .sendMessage({
-        content: finalContent,
-        recipients: emails,
-        channels,
+    try {
+      const review = await apiClient.aiRewriteModerate(finalContent, finalReason, 'profesional');
+      let allowed = review?.data?.allowed ?? true;
+      let reasons: string[] = review?.data?.reasons || [];
+      const normalize = (txt: string) =>
+      txt
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+    const textAgg = normalize(`${finalContent} ${finalReason}`);
+    const sensitiveKeywords = [
+      'odio',
+      'racism',
+      'xenofob',
+      'senofob',
+      'discriminac',
+      'violencia',
+      'acoso',
+      'amenaza',
+      'insulto',
+      'suicidio',
+      'matar',
+      'golpear',
+      'imbecil',
+      'imbecil',
+      'idiota',
+      'estupido',
+      'tonto',
+      'negro ', // con espacio para evitar colores neutrales; seguimos normalizado
+      'maldito',
+    ];
+    const keywordHit = sensitiveKeywords.find((kw) => textAgg.includes(kw));
+    if (keywordHit) {
+      allowed = false;
+      reasons = [...reasons, `Posible lenguaje sensible detectado: ${keywordHit}`];
+    }
+    if (!allowed) {
+      const reasonText = reasons.join(' | ') || 'Contenido sensible según políticas';
+      setSendError(`IA bloqueó el envío: ${reasonText}`);
+      setModerationInfo(`⚠️ IA: ${reasonText}`);
+      setSendLoading(false);
+      setModerationLoading(false);
+      setAiBlocked(true);
+      return;
+    }
+    setAiBlocked(false);
+    if (reasons.length) {
+      setModerationInfo(`Revisión IA: ${reasons.join(' | ')}`);
+    } else {
+      setModerationInfo('Revisión IA: sin hallazgos críticos.');
+    }
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        'No se pudo validar el mensaje con IA';
+      setSendError(msg);
+      setAiBlocked(true);
+      setSendLoading(false);
+      setModerationLoading(false);
+      return;
+    }
+
+  apiClient
+    .sendMessage({
+      content: finalContent,
+      recipients: emails,
+      channels,
         scheduleAt: scheduleIso,
         year,
+        groupIds: selectedGroups,
         reason: finalReason,
         attachments,
       })
@@ -328,8 +415,13 @@ export default function NewMessagePage() {
           return;
         }
         setSendSuccess(sendMode === 'now' ? 'Mensaje enviado.' : 'Mensaje programado.');
+        setAiBlocked(false);
+        setAiUses(0);
         setSelectedUserIds([]);
         setSelectedGroups([]);
+        setSelectedStudentIds([]);
+        setStep(1);
+        setSelectedTemplate(null);
         setMessageContent('');
         setScheduleAt('');
         setAttachedFile(null);
@@ -344,8 +436,15 @@ export default function NewMessagePage() {
           'No se pudo enviar el mensaje';
         setSendError(msg);
       })
-      .finally(() => setSendLoading(false));
-  };
+      .finally(() => {
+        setSendLoading(false);
+        setModerationLoading(false);
+        // Si hubo un timeout o error y quedó aiBlocked activo por error, lo liberamos aquí
+        if (sendError?.toLowerCase().includes('timeout')) {
+          setAiBlocked(false);
+        }
+      });
+};
 
   const nextStep = () => {
     if (step === 1) {
@@ -573,6 +672,16 @@ export default function NewMessagePage() {
         email: s.email,
         type: 'Estudiante',
       })),
+      ...selectedStudentRecipients.flatMap((s) =>
+        (s.guardians || [])
+          .filter((g) => g.email)
+          .map((g, idx) => ({
+            id: `guardian-${s.id}-${g.email || idx}`,
+            label: `${g.name || 'Apoderado'} (${s.firstName || 'Alumno'})`,
+            email: g.email,
+            type: 'Apoderado',
+          }))
+      ),
     ],
     [selectedRecipients, selectedStudentRecipients]
   );
@@ -598,6 +707,10 @@ export default function NewMessagePage() {
   };
 
   const handleAiRewriteModerate = async () => {
+    if (aiUses >= 3) {
+      setSendError('Límite de 3 usos de IA por mensaje. Ajusta el texto manualmente.');
+      return;
+    }
     if (!messageContent.trim()) {
       setSendError('Escribe un mensaje para mejorarlo con IA.');
       return;
@@ -624,6 +737,7 @@ export default function NewMessagePage() {
         setModerationInfo(`⚠️ Revisa el texto: ${reasons.join(', ') || 'posible contenido sensible'}`);
         setSendError('La IA detectó contenido sensible, revisa antes de enviar.');
       }
+      setAiUses((u) => u + 1);
     } catch (err: any) {
       const msg =
         err?.response?.data?.message ||
@@ -702,6 +816,23 @@ export default function NewMessagePage() {
               </p>
               <p className="text-xs text-gray-600 leading-relaxed">
                 Mejorando redacción, asunto y revisando seguridad. Esto puede tardar unos segundos.
+              </p>
+            </div>
+          </div>
+        )}
+        {moderationLoading && (
+          <div className="absolute inset-0 z-30 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center">
+            <div className="bg-white/95 border border-amber-200 shadow-xl rounded-2xl px-6 py-5 flex flex-col items-center gap-3 max-w-sm text-center">
+              <div className="relative h-14 w-14">
+                <div className="absolute inset-0 rounded-full border-4 border-amber-200 animate-ping" />
+                <div className="absolute inset-1 rounded-full border-4 border-amber-400 animate-spin" />
+                <div className="relative h-full w-full rounded-full bg-amber-500 flex items-center justify-center text-white font-bold">
+                  IA
+                </div>
+              </div>
+              <p className="text-sm font-semibold text-gray-800">Revisando políticas del colegio…</p>
+              <p className="text-xs text-gray-600 leading-relaxed">
+                Analizando lenguaje sensible y políticas internas antes de enviar.
               </p>
             </div>
           </div>
@@ -824,21 +955,33 @@ export default function NewMessagePage() {
                     </button>
                   </div>
                   <div className="h-4 w-px bg-gray-200" />
-                  <button
-                    type="button"
-                    onClick={handleAiRewriteModerate}
-                    disabled={aiLoading}
-                    className="px-3 py-1 rounded-full border border-primary text-primary font-semibold hover:bg-primary/10 disabled:opacity-50 flex items-center gap-2"
-                  >
-                    {aiLoading ? (
-                      <span className="flex items-center gap-1">
-                        <span className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
-                        Trabajando...
-                      </span>
-                    ) : (
-                      <>✨ Mejorar y revisar con IA</>
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleAiRewriteModerate}
+                      disabled={aiLoading || aiUses >= 3}
+                      className="px-4 py-2 rounded-full bg-gradient-to-r from-primary to-orange-500 text-white font-semibold shadow-md hover:shadow-lg hover:from-primary-dark hover:to-orange-600 transition-all disabled:opacity-50 disabled:shadow-none flex items-center gap-2"
+                    >
+                      {aiLoading ? (
+                        <span className="flex items-center gap-1">
+                          <span className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full" />
+                          Trabajando...
+                        </span>
+                      ) : (
+                        <>✨ Mejorar y revisar con IA</>
+                      )}
+                    </button>
+                    <span
+                      className={`text-xs font-semibold px-2 py-1 rounded-full border ${
+                        aiUses >= 3
+                          ? 'border-red-300 text-red-700 bg-red-50'
+                          : 'border-primary/40 text-primary bg-primary/10'
+                      }`}
+                      title="Máximo 3 usos de IA por mensaje"
+                    >
+                      Usos de IA: {aiUses}/3
+                    </span>
+                  </div>
                 </div>
               </div>
               <div>
@@ -869,6 +1012,12 @@ export default function NewMessagePage() {
                   {renderRich(messageContent) || <span className="text-gray-400">Escribe tu mensaje...</span>}
                 </div>
               </div>
+              {aiPolicy && (
+                <div className="text-xs text-gray-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                  <p className="font-semibold text-blue-800">Políticas del colegio para IA</p>
+                  <p className="text-[11px] text-blue-700 mt-1">{aiPolicy}</p>
+                </div>
+              )}
               {moderationInfo && (
                 <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                   {moderationInfo}
@@ -1443,9 +1592,9 @@ export default function NewMessagePage() {
                 <>
                   <button
                     type="submit"
-                    disabled={sendLoading}
+                    disabled={sendLoading || aiBlocked}
                     className={`w-full sm:flex-1 px-6 py-3 bg-primary text-white rounded-lg font-semibold transition-colors ${
-                      sendLoading ? 'opacity-70 cursor-not-allowed' : 'hover:bg-primary-dark'
+                      sendLoading || aiBlocked ? 'opacity-70 cursor-not-allowed' : 'hover:bg-primary-dark'
                     }`}
                   >
                     {sendLoading

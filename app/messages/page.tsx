@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { Modal } from '@/components/ui';
@@ -23,6 +23,35 @@ type MessageItem = {
   scheduledAt?: string;
   attachments?: { fileName: string; mimeType?: string; downloadUrl?: string; inline?: boolean }[];
   reason?: string;
+  schoolLogo?: string;
+  schoolLogoUrl?: string;
+  schoolName?: string;
+  school?: string;
+};
+
+const senderDisplayName = (name?: string, email?: string) => {
+  const cleanName = (name || '').trim();
+  const cleanEmail = (email || '').trim();
+  const emailLocal = cleanEmail ? (cleanEmail.split('@')[0] || cleanEmail) : '';
+  // Si el nombre es igual al correo, usamos el local-part formateado
+  if (cleanName && cleanEmail && cleanName.toLowerCase() !== cleanEmail.toLowerCase()) {
+    return cleanName;
+  }
+  if (cleanName && cleanEmail && cleanName.toLowerCase() === cleanEmail.toLowerCase()) {
+    return formatLocalPart(emailLocal);
+  }
+  if (cleanName) return cleanName;
+  if (emailLocal) return formatLocalPart(emailLocal);
+  return '—';
+};
+
+const formatLocalPart = (local: string) => {
+  if (!local) return '';
+  const words = local.replace(/[\.\-_]+/g, ' ').split(' ').filter(Boolean);
+  if (!words.length) return local;
+  return words
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
 };
 
 const renderRichText = (text?: string) => {
@@ -93,6 +122,7 @@ const statusIcon = (status?: string) => {
 export default function MessagesPage() {
   const { year } = useYearStore();
   const hasPermission = useAuthStore((state) => state.hasPermission);
+  const currentUser = useAuthStore((state) => state.user);
   const canList = hasPermission('messages.list');
   const canCreate = hasPermission('messages.create');
   const [messages, setMessages] = useState<MessageItem[]>([]);
@@ -113,7 +143,108 @@ export default function MessagesPage() {
   const [deleteReason, setDeleteReason] = useState('');
   const [deleteExtra, setDeleteExtra] = useState('');
   const [recipientFilter, setRecipientFilter] = useState('');
+  const detailRef = useRef<HTMLDivElement>(null);
   const pageSize = 20;
+
+  const printRecipient = (
+    recipient: string,
+    emailState: string,
+    appState: string,
+    appRead: boolean
+  ) => {
+    if (!selectedMessage) return;
+    const title = selectedMessage.reason || 'Detalle de mensaje';
+    const created =
+      selectedMessage.createdAt ? new Date(selectedMessage.createdAt).toLocaleString() : '';
+    const content =
+      typeof selectedMessage.content === 'string'
+        ? selectedMessage.content
+        : JSON.stringify(selectedMessage.content);
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const notiflowLogo = `${origin}/NotiflowH_01.png`;
+    const schoolLogo =
+      selectedMessage.schoolLogo ||
+      selectedMessage.schoolLogoUrl ||
+      `${origin}/Naranjo_Degradado.png`;
+    const schoolName =
+      selectedMessage.schoolName ||
+      selectedMessage.school ||
+      currentUser?.schoolName ||
+      'Colegio';
+    const html = `
+      <html>
+        <head>
+          <title>Registro de envío</title>
+          <style>
+            body { font-family: 'Inter', Arial, sans-serif; color: #0f172a; padding: 24px; background: #f8fafc; }
+            .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+            .brand { display: flex; align-items: center; gap: 12px; }
+            .brand img { height: 42px; }
+            .school img { height: 46px; border-radius: 10px; }
+            h1 { font-size: 22px; margin: 0 0 8px; }
+            h2 { font-size: 16px; margin: 12px 0 6px; color: #0f172a; }
+            .card { border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px; margin-bottom: 14px; background: #ffffff; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06); }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+            th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+            .meta { color: #475569; font-size: 12px; margin: 4px 0; }
+            .section-title { text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; font-size: 11px; margin: 0 0 6px; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="brand">
+              <img src="${notiflowLogo}" alt="Notiflow" />
+              <div>
+                <div style="font-weight:700; color:#0f172a;">Notiflow</div>
+                <div style="font-size:12px; color:#475569;">Registro de envío</div>
+              </div>
+            </div>
+            ${schoolLogo ? `<div class="school"><img src="${schoolLogo}" alt="${schoolName}" /></div>` : ''}
+          </div>
+          <h1>Detalle por destinatario</h1>
+          <div class="card">
+            <div class="section-title">Mensaje</div>
+            <div class="meta"><strong>Motivo:</strong> ${title}</div>
+            <div class="meta"><strong>Fecha:</strong> ${created || '—'}</div>
+            <div class="meta"><strong>Colegio:</strong> ${schoolName}</div>
+            <div style="margin-top:10px; white-space:pre-wrap; line-height:1.5;">${content}</div>
+          </div>
+          <div class="card">
+            <div class="section-title">Destinatario</div>
+            <div class="meta"><strong>Email:</strong> ${recipient}</div>
+            <div class="meta"><strong>Canales:</strong> ${Array.isArray(selectedMessage.channels) ? selectedMessage.channels.join(', ') : '—'}</div>
+            <table>
+              <tr><th>Correo enviado</th><td>${emailState}</td></tr>
+              <tr><th>App enviada</th><td>${appState}</td></tr>
+              <tr><th>App leída</th><td>${appRead ? 'Sí' : 'No'}</td></tr>
+            </table>
+          </div>
+        </body>
+      </html>
+    `;
+
+    // Imprimir sin abrir pestaña: usar iframe oculto
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document;
+    if (!doc) return;
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    iframe.onload = () => {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      setTimeout(() => document.body.removeChild(iframe), 500);
+    };
+  };
 
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedSearch(search.trim()), 250);
@@ -269,8 +400,10 @@ export default function MessagesPage() {
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-700">
                       <div className="flex flex-col">
-                        <span className="font-medium">{message.senderName || '—'}</span>
-                        <span className="text-xs text-gray-500">{message.senderEmail || '—'}</span>
+                        <span className="text-[11px] uppercase tracking-wide text-gray-500">Nombre de quien envía</span>
+                        <span className="font-medium text-gray-900">{senderDisplayName(message.senderName, message.senderEmail)}</span>
+                        <span className="text-[11px] uppercase tracking-wide text-gray-500 mt-1">Correo</span>
+                        <span className="text-xs text-gray-600">{message.senderEmail || '—'}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
@@ -505,6 +638,45 @@ export default function MessagesPage() {
         >
           {selectedMessage ? (
             <div className="space-y-5 text-sm text-gray-700 max-h-[88vh] overflow-auto w-full max-w-6xl mx-auto">
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!detailRef.current) return;
+                    const html = `
+                      <html>
+                        <head>
+                          <title>Detalle de envío</title>
+                          <style>
+                            body { font-family: Arial, sans-serif; color: #111827; padding: 16px; }
+                            h1 { font-size: 20px; margin-bottom: 8px; }
+                            h2 { font-size: 16px; margin: 12px 0 6px; }
+                            .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+                            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+                            th, td { border: 1px solid #e5e7eb; padding: 6px; text-align: left; }
+                            .chips span { display: inline-block; padding: 4px 8px; background: #f3f4f6; border-radius: 9999px; margin-right: 6px; }
+                          </style>
+                        </head>
+                        <body>
+                          <h1>Detalle de envío</h1>
+                          ${detailRef.current.innerHTML}
+                        </body>
+                      </html>`;
+                    const printWin = window.open('', '_blank');
+                    if (!printWin) return;
+                    printWin.document.open();
+                    printWin.document.write(html);
+                    printWin.document.close();
+                    printWin.focus();
+                    printWin.print();
+                    printWin.close();
+                  }}
+                  className="inline-flex items-center px-3 py-2 text-xs font-semibold bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors"
+                >
+                  Exportar PDF
+                </button>
+              </div>
+              <div ref={detailRef} className="space-y-5">
               <div className="bg-gradient-to-r from-gray-50 to-white border border-gray-200 rounded-xl p-5 shadow-sm">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -519,9 +691,13 @@ export default function MessagesPage() {
                     )}
                   </div>
                   <div className="text-right text-xs text-gray-500">
-                    <p>Enviado por</p>
-                    <p className="font-semibold text-gray-800 text-sm">{selectedMessage.senderName || '—'}</p>
-                    <p className="text-gray-500">{selectedMessage.senderEmail || '—'}</p>
+                    <p className="uppercase tracking-wide">Enviado por</p>
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500 mt-1">Nombre de quien envía</p>
+                    <p className="font-semibold text-gray-800 text-sm">
+                      {senderDisplayName(selectedMessage.senderName, selectedMessage.senderEmail)}
+                    </p>
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500 mt-1">Correo</p>
+                    <p className="text-gray-600">{selectedMessage.senderEmail || '—'}</p>
                   </div>
                 </div>
                 <div className="mt-3">
@@ -617,6 +793,7 @@ export default function MessagesPage() {
                           <th className="px-3 py-2 text-left">Correo recibido</th>
                           <th className="px-3 py-2 text-left">App enviada</th>
                           <th className="px-3 py-2 text-left">App leída</th>
+                          <th className="px-3 py-2 text-left">Acciones</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
@@ -635,6 +812,8 @@ export default function MessagesPage() {
                             (Array.isArray(selectedMessage.appReadBy) && selectedMessage.appReadBy.includes(r) ? 'read' : (selectedMessage.appStatus || 'pending'));
                           const appSent = hasApp ? (perRecipientAppStatus.toLowerCase() !== 'failed') : false;
                           const appRead = hasApp ? (perRecipientAppStatus.toLowerCase() === 'read') : false;
+                          const emailStateLabel = emailSent ? 'Enviado' : 'No enviado';
+                          const appStateLabel = appSent ? 'Enviado' : 'No enviado';
                           const icon = (state?: string, positive?: boolean) => {
                             const val = (state ?? '').toString().toLowerCase();
                             if (val === 'read' || (positive != null && positive)) return '✔✔';
@@ -649,6 +828,15 @@ export default function MessagesPage() {
                               <td className="px-3 py-2">{hasEmail ? (emailSent ? '✔' : '—') : '—'}</td>
                               <td className="px-3 py-2">{hasApp ? icon(perRecipientAppStatus, appSent) : '—'}</td>
                               <td className="px-3 py-2">{hasApp ? (appRead ? '✔✔' : '⌛') : '—'}</td>
+                              <td className="px-3 py-2">
+                                <button
+                                  type="button"
+                                  onClick={() => printRecipient(r, emailStateLabel, appStateLabel, appRead)}
+                                  className="text-primary text-xs font-semibold hover:underline"
+                                >
+                                  Exportar PDF
+                                </button>
+                              </td>
                             </tr>
                           );
                         })}
@@ -708,6 +896,7 @@ export default function MessagesPage() {
                   )}
                   <p className="text-xs text-gray-500">Canales: {Array.isArray(selectedMessage.channels) ? selectedMessage.channels.join(', ') : '—'}</p>
                 </div>
+              </div>
               </div>
             </div>
           ) : (
