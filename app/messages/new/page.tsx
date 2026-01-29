@@ -257,14 +257,22 @@ export default function NewMessagePage() {
       .flatMap((id) => (studentCache[id]?.guardians || []).map((g) => g.email))
       .filter((email): email is string => Boolean(email));
     const emails: string[] = Array.from(new Set<string>([...userEmails, ...studentEmails, ...guardianEmails]));
+    const selectedGroupMembers = selectedGroups
+      .map((gid) => groups.find((g) => g.id === gid))
+      .filter((g): g is { id: string; name: string; memberIds: string[] } => Boolean(g))
+      .flatMap((g) => g.memberIds || []);
+    const groupsHaveMembers = selectedGroupMembers.length > 0;
 
     if (!emails.length) {
       if (selectedGroups.length > 0) {
-        setSendError('No se encontraron correos en los grupos seleccionados. Verifica que tengan usuarios o alumnos con correo/apoderados.');
+        if (!groupsHaveMembers) {
+          setSendError('Los grupos seleccionados no tienen miembros.');
+          return;
+        }
       } else {
         setSendError('Selecciona al menos un usuario con correo.');
+        return;
       }
-      return;
     }
     if (!channels.length) {
       setSendError('Selecciona al menos un canal de envío.');
@@ -603,6 +611,12 @@ export default function NewMessagePage() {
       return;
     }
     const memberIds = group.memberIds || [];
+    const hasEmailMembers = memberIds.some((m) => (m || '').includes('@'));
+    if (hasEmailMembers) {
+      // Grupos del sistema guardan correos (no IDs). Evitamos expandir a usuarios/estudiantes.
+      setSelectedGroups((prev) => (prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]));
+      return;
+    }
     const studentMembers = memberIds.filter((m) => studentCache[m] || students.find((s) => s.id === m));
     const userMembers = memberIds.filter((m) => !studentMembers.includes(m));
 
@@ -650,6 +664,47 @@ export default function NewMessagePage() {
     if (gEmails.length === 0) return 'Sin correo';
     if (gEmails.length === 1) return gEmails[0];
     return `${gEmails[0]} (+${gEmails.length - 1})`;
+  };
+
+  const userById = useMemo(() => {
+    const map = new Map<string, { id: string; email?: string }>();
+    users.forEach((u) => map.set(u.id, u));
+    return map;
+  }, [users]);
+
+  const studentById = useMemo(() => {
+    const map: Record<string, StudentRecipient> = { ...studentCache };
+    students.forEach((s) => {
+      map[s.id] = s;
+    });
+    return map;
+  }, [studentCache, students]);
+
+  const groupImpactLabel = (group: { id: string; name: string; memberIds: string[] }) => {
+    const memberIds = group.memberIds || [];
+    if (memberIds.length === 0) {
+      return { count: 0, label: 'sin miembros' };
+    }
+    const emailMembers = memberIds.filter((m) => (m || '').includes('@'));
+    if (emailMembers.length > 0) {
+      const uniqueEmails = new Set(emailMembers.map((e) => e.trim().toLowerCase()).filter(Boolean));
+      return { count: uniqueEmails.size, label: 'destinatarios' };
+    }
+    const emailSet = new Set<string>();
+    memberIds.forEach((id) => {
+      const user = userById.get(id);
+      if (user?.email) emailSet.add(user.email.trim().toLowerCase());
+      const student = studentById[id];
+      if (student) {
+        const selfEmail = (student.email || '').trim();
+        if (selfEmail) emailSet.add(selfEmail.toLowerCase());
+        guardianEmailsOf(student).forEach((e) => emailSet.add(e.toLowerCase()));
+      }
+    });
+    if (emailSet.size > 0) {
+      return { count: emailSet.size, label: 'destinatarios' };
+    }
+    return { count: new Set(memberIds).size, label: 'miembros' };
   };
 
   const filteredUsers = useMemo(() => {
@@ -1281,7 +1336,17 @@ export default function NewMessagePage() {
                           />
                           <div className="flex-1">
                             <p className="font-medium text-gray-900">{grp.name}</p>
-                            <p className="text-xs text-gray-500">{grp.memberIds?.length || 0} miembro(s)</p>
+                            {(() => {
+                              const impact = groupImpactLabel(grp);
+                              if (impact.label === 'sin miembros') {
+                                return <p className="text-xs text-gray-500">Sin miembros</p>;
+                              }
+                              return (
+                                <p className="text-xs text-gray-500">
+                                  {impact.count} {impact.label}
+                                </p>
+                              );
+                            })()}
                           </div>
                         </label>
                       ))}

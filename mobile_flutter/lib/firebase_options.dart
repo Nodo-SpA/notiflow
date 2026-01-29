@@ -27,10 +27,10 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyCrzGWussCRYsJllTkR5v1-IVpMSOdnkAM',
-    appId: '1:763299778868:ios:9ac6494cdfbaeb4306d561',
+    appId: '1:763299778868:ios:cba584da986935d106d561',
     messagingSenderId: '763299778868',
     projectId: 'notiflow-480919-11ee8',
     storageBucket: 'notiflow-480919-11ee8.firebasestorage.app',
-    iosBundleId: 'com.notiflow.app',
+    iosBundleId: 'cl.notiflow.app',
   );
 }

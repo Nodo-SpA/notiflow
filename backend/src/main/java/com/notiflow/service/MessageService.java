@@ -285,6 +285,9 @@ public class MessageService {
                     .map(String::toLowerCase)
                     .distinct()
                     .toList();
+            if ((groupIds == null || groupIds.isEmpty()) && normalizedRecipients.isEmpty()) {
+                throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "No hay destinatarios");
+            }
 
             // Si se usan grupos del sistema, enriquecemos destinatarios y marcamos broadcast
             boolean broadcast = false;
@@ -316,6 +319,9 @@ public class MessageService {
                         .map(String::toLowerCase)
                         .distinct()
                         .toList();
+            }
+            if (normalizedRecipients.isEmpty()) {
+                throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "No hay destinatarios válidos");
             }
             msg.setRecipients(normalizedRecipients);
             msg.setChannels(channels);
