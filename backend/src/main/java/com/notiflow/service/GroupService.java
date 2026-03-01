@@ -64,6 +64,38 @@ public class GroupService {
         return fetch(filtered, query, page, pageSize);
     }
 
+    public int rebuildCourseGroups(String schoolId, String year) {
+        if (schoolId == null || schoolId.isBlank()) return 0;
+        String resolvedYear = (year == null || year.isBlank()) ? String.valueOf(Year.now().getValue()) : year;
+        List<com.notiflow.model.StudentDocument> students = studentService.listAllBySchoolAndYear(schoolId, resolvedYear);
+        java.util.Map<String, java.util.Set<String>> byCourse = new java.util.HashMap<>();
+
+        for (com.notiflow.model.StudentDocument s : students) {
+            if (s == null) continue;
+            String course = s.getCourse();
+            if (course == null || course.isBlank()) {
+                course = "N/A";
+            }
+            java.util.Set<String> members = new java.util.HashSet<>();
+            if (s.getId() != null && !s.getId().isBlank()) {
+                members.add(s.getId().trim());
+            }
+            if (members.isEmpty()) {
+                continue;
+            }
+            byCourse.computeIfAbsent(course, k -> new java.util.HashSet<>()).addAll(members);
+        }
+
+        int updated = 0;
+        for (var entry : byCourse.entrySet()) {
+            String course = entry.getKey();
+            java.util.List<String> members = entry.getValue().stream().toList();
+            upsertCourseGroup(course, members, schoolId, resolvedYear);
+            updated++;
+        }
+        return updated;
+    }
+
     public GroupListResponse listAll(String year, String query, int page, int pageSize) {
         var baseCollection = firestore.collectionGroup("groups");
         var filtered = (year != null && !year.isBlank())
@@ -194,7 +226,9 @@ public class GroupService {
 
             return new GroupDto(g.getId(), g.getName(), g.getDescription(), g.getMemberIds(), g.getSchoolId(), g.getYear(), g.getCreatedAt(), g.getSystem(), g.getSystemType());
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error creando grupo", e);
         }
     }
@@ -252,7 +286,9 @@ public class GroupService {
             }
             return new GroupDto(existing.getId(), existing.getName(), existing.getDescription(), existing.getMemberIds(), existing.getSchoolId(), existing.getYear(), existing.getCreatedAt(), existing.getSystem(), existing.getSystemType());
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error actualizando grupo", e);
         }
     }
@@ -290,7 +326,9 @@ public class GroupService {
             }
             ref.delete().get();
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error eliminando grupo", e);
         }
     }
@@ -324,7 +362,9 @@ public class GroupService {
             }
             return Optional.empty();
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error consultando grupo", e);
         }
     }
@@ -388,9 +428,59 @@ public class GroupService {
             ref.set(g).get();
             return new GroupDto(g.getId(), g.getName(), g.getDescription(), g.getMemberIds(), g.getSchoolId(), g.getYear(), g.getCreatedAt(), g.getSystem(), g.getSystemType());
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error asegurando grupos por defecto", e);
         }
+    }
+
+    private void upsertCourseGroup(String course, List<String> members, String schoolId, String year) {
+        try {
+            String id = slug(schoolId + "-" + course + "-" + year);
+            DocumentReference ref = tenantGroups(schoolId).document(id);
+            var snap = ref.get().get();
+            GroupDocument g = snap.exists() ? snap.toObject(GroupDocument.class) : new GroupDocument();
+            if (g == null) g = new GroupDocument();
+            g.setId(id);
+            g.setName(course);
+            g.setDescription(course);
+            g.setSchoolId(schoolId);
+            g.setYear(year);
+            g.setMemberIds(members == null ? List.of() : members.stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(s -> !s.isBlank())
+                    .map(this::normalizeGroupMember)
+                    .distinct()
+                    .toList());
+            if (g.getCreatedAt() == null) {
+                g.setCreatedAt(Instant.now());
+            }
+            if (g.getSystem() == null) {
+                g.setSystem(false);
+            }
+            if (g.getSystemType() == null) {
+                g.setSystemType(null);
+            }
+            ref.set(g).get();
+        } catch (InterruptedException | ExecutionException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw new RuntimeException("Error recreando grupo de curso", e);
+        }
+    }
+
+    private String slug(String text) {
+        if (text == null) return "";
+        return text.toLowerCase().replaceAll("[^0-9a-z]+", "-");
+    }
+
+    private String normalizeGroupMember(String member) {
+        String value = member == null ? "" : member.trim();
+        if (value.isBlank()) return value;
+        return value.contains("@") ? value.toLowerCase() : value;
     }
 
     public String systemId(String type, String year) {

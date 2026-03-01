@@ -1,6 +1,14 @@
 package com.notiflow.service;
 
 import com.notiflow.dto.AttachmentRequest;
+import com.sendgrid.Method;
+import com.sendgrid.Request;
+import com.sendgrid.Response;
+import com.sendgrid.SendGrid;
+import com.sendgrid.helpers.mail.Mail;
+import com.sendgrid.helpers.mail.objects.Attachments;
+import com.sendgrid.helpers.mail.objects.Content;
+import com.sendgrid.helpers.mail.objects.Email;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,7 +24,6 @@ import software.amazon.awssdk.services.ses.model.RawMessage;
 import software.amazon.awssdk.services.ses.model.SendRawEmailRequest;
 
 import jakarta.mail.Message;
-import jakarta.mail.MessagingException;
 import jakarta.mail.Session;
 import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeBodyPart;
@@ -29,7 +36,6 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 import java.util.List;
-import java.util.Objects;
 import java.util.Properties;
 
 @Service
@@ -37,7 +43,9 @@ public class EmailService {
 
     private static final Logger log = LoggerFactory.getLogger(EmailService.class);
     private final SesClient sesClient;
-    private final boolean enabled;
+    private final SendGrid sendGridClient;
+    private final boolean sendGridEnabled;
+    private final boolean sesEnabled;
     private final String senderEmail;
     private final String frontendBaseUrl;
 
@@ -45,6 +53,7 @@ public class EmailService {
             @Value("${AWS_SES_ACCESS_KEY:}") String accessKey,
             @Value("${AWS_SES_SECRET_KEY:}") String secretKey,
             @Value("${AWS_SES_REGION:}") String awsRegion,
+            @Value("${SENDGRID_API_KEY:}") String sendGridApiKey,
             @Value("${app.mail.from:no-reply@notiflow.local}") String senderEmail,
             @Value("${app.frontend-url:https://hectorguzman.github.io/notiflow}") String frontendBaseUrl
     ) {
@@ -54,7 +63,7 @@ public class EmailService {
                 : frontendBaseUrl;
 
         SesClient client = null;
-        boolean sesEnabled = false;
+        boolean sesEnabledLocal = false;
         if (awsRegion != null && !awsRegion.isBlank() && senderEmail != null && !senderEmail.isBlank()) {
             AwsCredentialsProvider provider;
             if (accessKey != null && !accessKey.isBlank() && secretKey != null && !secretKey.isBlank()) {
@@ -67,20 +76,25 @@ public class EmailService {
                         .region(Region.of(awsRegion))
                         .credentialsProvider(provider)
                         .build();
-                sesEnabled = true;
+                sesEnabledLocal = true;
             } catch (Exception e) {
                 log.error("No se pudo inicializar SES: {}", e.getMessage());
             }
         }
         this.sesClient = client;
-        this.enabled = sesEnabled;
+        this.sesEnabled = sesEnabledLocal;
+
+        SendGrid sg = null;
+        boolean sgEnabled = false;
+        if (sendGridApiKey != null && !sendGridApiKey.isBlank()) {
+            sg = new SendGrid(sendGridApiKey);
+            sgEnabled = true;
+        }
+        this.sendGridClient = sg;
+        this.sendGridEnabled = sgEnabled;
     }
 
     public boolean sendPasswordResetEmail(String to, String token, Instant expiresAt) {
-        if (!enabled || sesClient == null) {
-            log.warn("SES no está configurado; no se enviará email de recuperación");
-            return false;
-        }
         String link = buildResetLink(token);
         String humanExpiration = expiresAt == null
                 ? "pronto"
@@ -105,8 +119,11 @@ public class EmailService {
     }
 
     public boolean sendMessageEmail(String to, String subject, String htmlBody, String textBody, List<AttachmentRequest> attachments) {
-        if (!enabled || sesClient == null) {
-            log.warn("SES no configurado; se omite envío a {}", to);
+        if (sendGridEnabled && sendGridClient != null) {
+            return sendWithSendGrid(to, subject, htmlBody, textBody, attachments);
+        }
+        if (!sesEnabled || sesClient == null) {
+            log.warn("Email no configurado; se omite envío a {}", to);
             return false;
         }
         try {
@@ -124,7 +141,7 @@ public class EmailService {
     }
 
     public boolean isEnabled() {
-        return enabled;
+        return sendGridEnabled || sesEnabled;
     }
 
     private String buildResetLink(String token) {
@@ -135,10 +152,6 @@ public class EmailService {
     }
 
     public boolean sendWelcomeEmail(String to, String name, String token) {
-        if (!enabled || sesClient == null) {
-            log.warn("SES no configurado; se omite envío de bienvenida a {}", to);
-            return false;
-        }
         String link = buildResetLink(token);
         String text = """
                 Hola %s,
@@ -154,6 +167,13 @@ public class EmailService {
     }
 
     private boolean sendPlainEmail(String to, String subject, String textBody) {
+        if (sendGridEnabled && sendGridClient != null) {
+            return sendWithSendGrid(to, subject, null, textBody, null);
+        }
+        if (!sesEnabled || sesClient == null) {
+            log.warn("Email no configurado; se omite envío simple a {}", to);
+            return false;
+        }
         try {
             MimeMessage message = baseMessage(to, subject);
             message.setText(textBody, StandardCharsets.UTF_8.name());
@@ -180,6 +200,9 @@ public class EmailService {
             String textBody,
             List<AttachmentRequest> attachments
     ) throws Exception {
+        if (sendGridEnabled && sendGridClient != null) {
+            throw new IllegalStateException("SendGrid habilitado; usa sendWithSendGrid");
+        }
         MimeMessage message = baseMessage(to, subject);
 
         MimeMultipart mixed = new MimeMultipart("mixed");
@@ -233,6 +256,10 @@ public class EmailService {
     }
 
     private boolean sendRaw(MimeMessage message) {
+        if (!sesEnabled || sesClient == null) {
+            log.warn("SES no configurado; no se enviará email raw");
+            return false;
+        }
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             message.writeTo(out);
@@ -244,6 +271,63 @@ public class EmailService {
             return true;
         } catch (Exception e) {
             log.error("SES sendRawEmail error: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    private boolean sendWithSendGrid(
+            String to,
+            String subject,
+            String htmlBody,
+            String textBody,
+            List<AttachmentRequest> attachments
+    ) {
+        if (!sendGridEnabled || sendGridClient == null) {
+            log.warn("SendGrid no configurado; se omite envío a {}", to);
+            return false;
+        }
+        try {
+            Email from = new Email(senderEmail, "Notiflow");
+            Email toEmail = new Email(to);
+            String plain = textBody != null && !textBody.isBlank()
+                    ? textBody
+                    : (htmlBody != null ? stripHtml(htmlBody) : "");
+            Content plainContent = new Content("text/plain", plain);
+            Mail mail = new Mail(from, subject, toEmail, plainContent);
+            if (htmlBody != null && !htmlBody.isBlank()) {
+                mail.addContent(new Content("text/html", htmlBody));
+            }
+            if (attachments != null) {
+                for (AttachmentRequest att : attachments) {
+                    if (att == null || att.base64() == null || att.fileName() == null) continue;
+                    Attachments sgAtt = new Attachments();
+                    sgAtt.setContent(att.base64());
+                    sgAtt.setType(att.mimeType() != null ? att.mimeType() : "application/octet-stream");
+                    sgAtt.setFilename(att.fileName());
+                    if (Boolean.TRUE.equals(att.inline())) {
+                        sgAtt.setDisposition("inline");
+                        if (att.cid() != null) {
+                            sgAtt.setContentId(att.cid());
+                        }
+                    } else {
+                        sgAtt.setDisposition("attachment");
+                    }
+                    mail.addAttachments(sgAtt);
+                }
+            }
+            Request request = new Request();
+            request.setMethod(Method.POST);
+            request.setEndpoint("mail/send");
+            request.setBody(mail.build());
+            Response response = sendGridClient.api(request);
+            int status = response.getStatusCode();
+            if (status >= 200 && status < 300) {
+                return true;
+            }
+            log.error("SendGrid error {}: {}", status, response.getBody());
+            return false;
+        } catch (Exception e) {
+            log.error("No se pudo enviar correo SendGrid a {}: {}", to, e.getMessage());
             return false;
         }
     }

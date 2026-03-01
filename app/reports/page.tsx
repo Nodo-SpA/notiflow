@@ -71,46 +71,69 @@ export default function ReportsPage() {
       setLoading(true);
       setError('');
       try {
-        const res = await apiClient.getMessages({ year });
-        const data = res.data || {};
-        const items = (data as any).items ?? data ?? [];
-        setMessages(items);
-        const pageSize = 500;
+        const fetchAllMessages = async () => {
+          const all: MessageReport[] = [];
+          const pageSize = 100;
+          let page = 1;
+          let hasMore = true;
+          while (hasMore) {
+            const res = await apiClient.getMessages({ year, page, pageSize });
+            const data = res.data || {};
+            const items = (data as any).items ?? data ?? [];
+            if (!Array.isArray(items) || items.length === 0) break;
+            all.push(...items);
+            hasMore = (data as any).hasMore === true;
+            if (!hasMore) break;
+            page += 1;
+            if (page > 100) break;
+          }
+          return all;
+        };
+
+        const pageSize = 100;
         const fetchAllUsers = async () => {
           let page = 1;
           const acc: UserLight[] = [];
           while (true) {
             const resUsers = await apiClient.getUsers({ page, pageSize });
-            const dataUsers = resUsers.data || {};
-            const itemsUsers = (dataUsers as any).items ?? dataUsers ?? [];
+            const dataUsers = resUsers.data;
+            const itemsUsers = Array.isArray(dataUsers) ? dataUsers : (dataUsers as any)?.items || [];
             if (!Array.isArray(itemsUsers) || itemsUsers.length === 0) break;
             acc.push(...itemsUsers);
-            const totalUsers = (dataUsers as any).total ?? itemsUsers.length;
-            if (acc.length >= totalUsers) break;
+            if (itemsUsers.length < pageSize) break;
             page++;
+            if (page > 100) break;
           }
           return acc;
         };
         const fetchAllStudents = async () => {
           let page = 1;
           const acc: StudentLight[] = [];
-          while (true) {
+          const studentPageSize = 200;
+          let hasMore = true;
+          while (hasMore) {
             const resStudents = await apiClient.getStudents({
               year: year || undefined,
               page,
-              pageSize,
+              pageSize: studentPageSize,
             });
             const dataStudents = resStudents.data || {};
             const itemsStudents = (dataStudents as any).items ?? dataStudents ?? [];
             if (!Array.isArray(itemsStudents) || itemsStudents.length === 0) break;
             acc.push(...itemsStudents);
-            const totalStudents = (dataStudents as any).total ?? itemsStudents.length;
-            if (acc.length >= totalStudents) break;
+            hasMore = (dataStudents as any).hasMore === true;
+            if (!hasMore) break;
             page++;
+            if (page > 100) break;
           }
           return acc;
         };
-        const [allUsers, allStudents] = await Promise.all([fetchAllUsers(), fetchAllStudents()]);
+        const [allMessages, allUsers, allStudents] = await Promise.all([
+          fetchAllMessages(),
+          fetchAllUsers(),
+          fetchAllStudents(),
+        ]);
+        setMessages(allMessages);
         setUsers(allUsers);
         setStudents(allStudents);
         const usageRes = await apiClient.getUsageMetrics();

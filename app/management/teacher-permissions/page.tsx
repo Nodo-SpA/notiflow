@@ -29,16 +29,48 @@ export default function TeacherPermissionsPage() {
       setLoading(true);
       setError('');
       try {
-        const [teachersRes, groupsRes, permsRes] = await Promise.all([
-          apiClient.getUsers({ role: 'teacher' }),
-          apiClient.getGroups(),
+        const fetchAllUsers = async () => {
+          const all: Teacher[] = [];
+          const pageSize = 100;
+          let page = 1;
+          while (true) {
+            const res = await apiClient.getUsers({ page, pageSize });
+            const raw = res.data;
+            const chunk = (Array.isArray(raw) ? raw : (raw as any)?.items || []) as Teacher[];
+            if (!chunk.length) break;
+            all.push(...chunk);
+            if (chunk.length < pageSize) break;
+            page += 1;
+            if (page > 50) break;
+          }
+          return all;
+        };
+        const fetchAllGroups = async () => {
+          const all: Group[] = [];
+          const pageSize = 100;
+          let page = 1;
+          while (true) {
+            const res = await apiClient.getGroups(undefined, undefined, undefined, page, pageSize);
+            const raw = res.data;
+            const chunk = (Array.isArray(raw) ? raw : (raw as any)?.items || []) as Group[];
+            if (!chunk.length) break;
+            all.push(...chunk);
+            const hasMore = Array.isArray(raw) ? chunk.length === pageSize : (raw as any)?.hasMore === true;
+            if (!hasMore) break;
+            page += 1;
+            if (page > 50) break;
+          }
+          return all;
+        };
+
+        const [fetchedTeachers, fetchedGroups, permsRes] = await Promise.all([
+          fetchAllUsers(),
+          fetchAllGroups(),
           apiClient.getTeacherPermissions?.(),
         ]);
-        const fetchedTeachers = (teachersRes.data || []) as Teacher[];
         const onlyTeachers = fetchedTeachers.filter((t) => (t.role || '').toLowerCase() === 'teacher');
         setTeachers(onlyTeachers);
-        const gData = groupsRes.data || [];
-        setGroups((gData as any).items ?? gData ?? []);
+        setGroups(fetchedGroups);
         const permList = (permsRes?.data || []) as Permission[];
         const map: Record<string, string[]> = {};
         permList.forEach((p) => {

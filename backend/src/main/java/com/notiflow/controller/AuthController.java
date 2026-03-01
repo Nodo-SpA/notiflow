@@ -10,6 +10,8 @@ import com.notiflow.dto.OtpRequest;
 import com.notiflow.dto.OtpVerifyRequest;
 import com.notiflow.dto.RefreshRequest;
 import com.notiflow.service.OtpService;
+import com.notiflow.service.UserService;
+import com.notiflow.service.StudentService;
 import com.notiflow.service.UsageService;
 import com.notiflow.service.AuthService;
 import com.notiflow.service.JwtService;
@@ -38,15 +40,19 @@ public class AuthController {
     private final RefreshTokenStore refreshTokenStore;
     private final PasswordResetService passwordResetService;
     private final OtpService otpService;
+    private final StudentService studentService;
+    private final UserService userService;
     private final UsageService usageService;
 
-    public AuthController(AuthService authService, JwtService jwtService, RefreshJwtService refreshJwtService, RefreshTokenStore refreshTokenStore, PasswordResetService passwordResetService, OtpService otpService, UsageService usageService) {
+    public AuthController(AuthService authService, JwtService jwtService, RefreshJwtService refreshJwtService, RefreshTokenStore refreshTokenStore, PasswordResetService passwordResetService, OtpService otpService, StudentService studentService, UserService userService, UsageService usageService) {
         this.authService = authService;
         this.jwtService = jwtService;
         this.refreshJwtService = refreshJwtService;
         this.refreshTokenStore = refreshTokenStore;
         this.passwordResetService = passwordResetService;
         this.otpService = otpService;
+        this.studentService = studentService;
+        this.userService = userService;
         this.usageService = usageService;
     }
 
@@ -142,8 +148,33 @@ public class AuthController {
 
     @PostMapping("/otp/request")
     public ResponseEntity<?> requestOtp(@Valid @RequestBody OtpRequest request) {
-        otpService.requestCode(request.email());
-        return ResponseEntity.ok(Map.of("message", "Código enviado si el correo existe"));
+        String email = request.email() == null ? "" : request.email().trim().toLowerCase();
+        boolean reviewer = otpService.isReviewerEmail(email);
+        boolean studentsOnly = Boolean.TRUE.equals(request.studentsOnly());
+        if (!reviewer) {
+            try {
+                if (studentsOnly) {
+                    if (studentService == null || studentService.findAllByEmail(email).isEmpty()) {
+                        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                                .body(Map.of("message", "Tu correo no está registrado. Contacta al administrador para que te incorpore."));
+                    }
+                } else if (userService == null || userService.findByEmail(email).isEmpty()) {
+                    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                            .body(Map.of("message", "Tu correo no está registrado en la plataforma."));
+                }
+            } catch (Exception ex) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "No se pudo validar tu correo. Intenta nuevamente."));
+            }
+        }
+        String reviewerCode = otpService.requestCode(email);
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("message", "Código enviado si el correo existe");
+        if (reviewerCode != null) {
+            body.put("reviewer", true);
+            body.put("reviewerCode", reviewerCode);
+        }
+        return ResponseEntity.ok(body);
     }
 
     @PostMapping("/otp/verify")

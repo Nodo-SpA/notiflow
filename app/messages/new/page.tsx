@@ -63,6 +63,7 @@ export default function NewMessagePage() {
   const hasPermission = useAuthStore((state) => state.hasPermission);
   const currentUser = useAuthStore((state) => state.user);
   const canCreate = hasPermission('messages.create');
+  const isTeacher = (currentUser?.role || '').toLowerCase() === 'teacher';
   const [templates, setTemplates] = useState<Template[]>([]);
   const [recentTemplates, setRecentTemplates] = useState<Template[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
@@ -99,9 +100,12 @@ export default function NewMessagePage() {
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [studentsError, setStudentsError] = useState('');
   const [studentCache, setStudentCache] = useState<Record<string, StudentRecipient>>({});
-  const [groups, setGroups] = useState<{ id: string; name: string; memberIds: string[] }[]>([]);
+  const [groups, setGroups] = useState<{ id: string; name: string; memberIds: string[]; year?: string }[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [groupsError, setGroupsError] = useState('');
+  const [allowedGroupIds, setAllowedGroupIds] = useState<string[] | null>(null);
+  const [loadingAllowedGroups, setLoadingAllowedGroups] = useState(false);
+  const [teacherStudents, setTeacherStudents] = useState<StudentRecipient[]>([]);
   const [sendLoading, setSendLoading] = useState(false);
   const [sendError, setSendError] = useState('');
   const [sendSuccess, setSendSuccess] = useState('');
@@ -118,6 +122,10 @@ export default function NewMessagePage() {
   const [showAllRecipients, setShowAllRecipients] = useState(false);
   const [showStepsMobile, setShowStepsMobile] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [groupSelectionFeedback, setGroupSelectionFeedback] = useState<{
+    type: 'add' | 'remove';
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!canCreate) return;
@@ -136,8 +144,20 @@ export default function NewMessagePage() {
       setLoadingUsers(true);
       setUsersError('');
       try {
-        const res = await apiClient.getUsers();
-        setUsers(res.data || []);
+        const all: { id: string; name: string; email: string }[] = [];
+        const pageSize = 100;
+        let page = 1;
+        while (true) {
+          const res = await apiClient.getUsers({ page, pageSize });
+          const raw = res.data;
+          const chunk = Array.isArray(raw) ? raw : raw?.items || [];
+          if (!chunk.length) break;
+          all.push(...chunk);
+          if (chunk.length < pageSize) break;
+          page += 1;
+          if (page > 50) break;
+        }
+        setUsers(all);
       } catch (err: any) {
         const msg =
           err?.response?.data?.message ||
@@ -169,9 +189,21 @@ export default function NewMessagePage() {
       setLoadingGroups(true);
       setGroupsError('');
       try {
-        const res = await apiClient.getGroups(undefined, year);
-        const data = res.data || [];
-        setGroups((data as any).items ?? data ?? []);
+        const all: { id: string; name: string; memberIds: string[]; year?: string }[] = [];
+        const pageSize = 100;
+        let page = 1;
+        while (true) {
+          const res = await apiClient.getGroups(undefined, year, undefined, page, pageSize);
+          const raw = res.data;
+          const chunk = Array.isArray(raw) ? raw : raw?.items || [];
+          if (!chunk.length) break;
+          all.push(...chunk);
+          const hasMore = Array.isArray(raw) ? chunk.length === pageSize : raw?.hasMore === true;
+          if (!hasMore) break;
+          page += 1;
+          if (page > 50) break;
+        }
+        setGroups(all);
       } catch (err: any) {
         const msg =
           err?.response?.data?.message ||
@@ -187,7 +219,99 @@ export default function NewMessagePage() {
   }, [canCreate, year]);
 
   useEffect(() => {
+    if (!isTeacher || !allowedGroupIds) return;
+    setSelectedGroups((prev) => prev.filter((id) => allowedGroupIds.includes(id)));
+  }, [isTeacher, allowedGroupIds]);
+
+  useEffect(() => {
+    if (!isTeacher || !currentUser?.email) {
+      setAllowedGroupIds(null);
+      return;
+    }
+    let active = true;
+    setLoadingAllowedGroups(true);
+    apiClient
+      .getTeacherPermissions()
+      .then((res) => {
+        if (!active) return;
+        const list = Array.isArray(res.data) ? res.data : [];
+        const match = list.find(
+          (p: any) => (p?.email || '').toLowerCase() === currentUser.email?.toLowerCase()
+        );
+        const allowed = (match?.allowedGroupIds || list[0]?.allowedGroupIds || []) as string[];
+        setAllowedGroupIds(Array.isArray(allowed) ? allowed : []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setAllowedGroupIds([]);
+      })
+      .finally(() => {
+        if (!active) return;
+        setLoadingAllowedGroups(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isTeacher, currentUser?.email]);
+
+  useEffect(() => {
     if (!canCreate) return;
+    if (!isTeacher) return;
+    if (allowedGroupIds == null) return;
+    if (allowedGroupIds.length === 0) {
+      setTeacherStudents([]);
+      setStudents([]);
+      setStudentsTotal(0);
+      return;
+    }
+    const loadAllStudents = async () => {
+      setLoadingStudents(true);
+      setStudentsError('');
+      try {
+        const all: StudentRecipient[] = [];
+        const pageSize = 500;
+        let page = 1;
+        let hasMore = true;
+        while (hasMore) {
+          const res = await apiClient.getStudents({
+            year: year || undefined,
+            page,
+            pageSize,
+          });
+          const data = res.data || {};
+          const items = data.items || [];
+          all.push(...items);
+          hasMore = data.hasMore === true;
+          if (!hasMore || items.length === 0) break;
+          page += 1;
+          if (page > 50) break; // safety cap
+        }
+        setTeacherStudents(all);
+        setStudentCache((prev) => {
+          const next = { ...prev };
+          all.forEach((s: StudentRecipient) => {
+            next[s.id] = s;
+          });
+          return next;
+        });
+      } catch (err: any) {
+        const msg =
+          err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          'No se pudieron cargar los estudiantes';
+        setStudentsError(msg);
+        setTeacherStudents([]);
+      } finally {
+        setLoadingStudents(false);
+      }
+    };
+    loadAllStudents();
+  }, [canCreate, isTeacher, allowedGroupIds, year]);
+
+  useEffect(() => {
+    if (!canCreate) return;
+    if (isTeacher) return;
     const loadStudents = async () => {
       setLoadingStudents(true);
       setStudentsError('');
@@ -221,7 +345,7 @@ export default function NewMessagePage() {
       }
     };
     loadStudents();
-  }, [canCreate, year, studentPage, debouncedStudentSearch, studentPageSize]);
+  }, [canCreate, isTeacher, year, studentPage, debouncedStudentSearch, studentPageSize]);
 
   const fileToBase64 = (file: File) =>
     new Promise<string>((resolve, reject) => {
@@ -421,6 +545,7 @@ export default function NewMessagePage() {
         scheduleAt: scheduleIso,
         year,
         groupIds: selectedGroups,
+        studentIds: selectedStudentIds.length ? selectedStudentIds : undefined,
         reason: finalReason,
         attachments,
       })
@@ -605,33 +730,109 @@ export default function NewMessagePage() {
   };
 
   const toggleGroup = (id: string) => {
+    if (isTeacher && allowedGroupIds && !allowedGroupIds.includes(id)) {
+      return;
+    }
     const group = groups.find((g) => g.id === id);
     if (!group) {
       setSelectedGroups((prev) => (prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]));
       return;
     }
     const memberIds = group.memberIds || [];
-    const hasEmailMembers = memberIds.some((m) => (m || '').includes('@'));
-    if (hasEmailMembers) {
-      // Grupos del sistema guardan correos (no IDs). Evitamos expandir a usuarios/estudiantes.
-      setSelectedGroups((prev) => (prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]));
-      return;
-    }
-    const studentMembers = memberIds.filter((m) => studentCache[m] || students.find((s) => s.id === m));
-    const userMembers = memberIds.filter((m) => !studentMembers.includes(m));
+    const normalizeId = (value: string) =>
+      value
+        .trim()
+        .toLowerCase()
+        .replace(/[‐‑‒–—−]/g, '-')
+        .replace(/[.\s'"`]/g, '');
+    const idVariants = (value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) return [];
+      const normalized = normalizeId(trimmed);
+      const noHyphen = normalized.replace(/-/g, '');
+      return Array.from(new Set([trimmed, trimmed.toLowerCase(), normalized, noHyphen])).filter(Boolean);
+    };
+    const addToMap = (map: Map<string, Set<string>>, key: string, value: string) => {
+      const cleanKey = (key || '').trim();
+      if (!cleanKey) return;
+      const current = map.get(cleanKey) || new Set<string>();
+      current.add(value);
+      map.set(cleanKey, current);
+    };
 
+    const allStudents = new Map<string, StudentRecipient>();
+    [...teacherStudents, ...students, ...Object.values(studentCache)].forEach((s) => {
+      if (!s?.id || allStudents.has(s.id)) return;
+      allStudents.set(s.id, s);
+    });
+
+    const studentsById = new Map<string, Set<string>>();
+    const studentsByEmail = new Map<string, Set<string>>();
+    allStudents.forEach((student) => {
+      idVariants(student.id).forEach((key) => addToMap(studentsById, key, student.id));
+      const emails = [
+        (student.email || '').trim().toLowerCase(),
+        ...((student.guardians || [])
+          .map((g) => (g?.email || '').trim().toLowerCase())
+          .filter(Boolean)),
+      ].filter(Boolean);
+      emails.forEach((email) => addToMap(studentsByEmail, email, student.id));
+    });
+
+    const usersById = new Set(users.map((u) => u.id));
+    const usersByEmail = new Map<string, Set<string>>();
+    users.forEach((u) => {
+      const email = (u.email || '').trim().toLowerCase();
+      if (!email) return;
+      addToMap(usersByEmail, email, u.id);
+    });
+
+    const studentMembersSet = new Set<string>();
+    const userMembersSet = new Set<string>();
+    memberIds.forEach((member) => {
+      const raw = (member || '').trim();
+      if (!raw) return;
+      if (raw.includes('@')) {
+        const emailKey = raw.toLowerCase();
+        usersByEmail.get(emailKey)?.forEach((uid) => userMembersSet.add(uid));
+        studentsByEmail.get(emailKey)?.forEach((sid) => studentMembersSet.add(sid));
+        return;
+      }
+      idVariants(raw).forEach((variant) => {
+        studentsById.get(variant)?.forEach((sid) => studentMembersSet.add(sid));
+      });
+      if (usersById.has(raw)) {
+        userMembersSet.add(raw);
+      }
+    });
+
+    const studentMembers = Array.from(studentMembersSet);
+    const userMembers = Array.from(userMembersSet);
     const allSelected =
-      (memberIds.length === 0 ? false : memberIds.every((m) => selectedUserIds.includes(m) || selectedStudentIds.includes(m))) &&
-      selectedGroups.includes(id);
+      selectedGroups.includes(id) &&
+      studentMembers.every((sid) => selectedStudentIds.includes(sid)) &&
+      userMembers.every((uid) => selectedUserIds.includes(uid));
 
     if (allSelected) {
+      const removedCount = studentMembers.length + userMembers.length;
       setSelectedUserIds((prev) => prev.filter((uid) => !userMembers.includes(uid)));
       setSelectedStudentIds((prev) => prev.filter((sid) => !studentMembers.includes(sid)));
       setSelectedGroups((prev) => prev.filter((r) => r !== id));
+      setGroupSelectionFeedback({
+        type: 'remove',
+        text: `${group.name}: -${removedCount} persona(s)`,
+      });
     } else {
+      const addedUsers = userMembers.filter((uid) => !selectedUserIds.includes(uid)).length;
+      const addedStudents = studentMembers.filter((sid) => !selectedStudentIds.includes(sid)).length;
+      const addedCount = addedUsers + addedStudents;
       setSelectedUserIds((prev) => Array.from(new Set([...prev, ...userMembers])));
       setSelectedStudentIds((prev) => Array.from(new Set([...prev, ...studentMembers])));
       setSelectedGroups((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      setGroupSelectionFeedback({
+        type: 'add',
+        text: `${group.name}: +${addedCount} persona(s)`,
+      });
     }
   };
 
@@ -664,6 +865,34 @@ export default function NewMessagePage() {
     if (gEmails.length === 0) return 'Sin correo';
     if (gEmails.length === 1) return gEmails[0];
     return `${gEmails[0]} (+${gEmails.length - 1})`;
+  };
+
+  const normalizeCourse = (value?: string) =>
+    (value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+
+  const courseKey = (course?: string, targetYear?: string) => {
+    const normalizedCourse = normalizeCourse(course);
+    const normalizedYear = (targetYear || year || '').trim().toLowerCase();
+    return `${normalizedYear}::${normalizedCourse}`;
+  };
+
+  const memberIdVariants = (value?: string) => {
+    if (!value) return [];
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    const unquoted = trimmed.replace(/^['"`]+|['"`]+$/g, '').trim();
+    const lower = unquoted.toLowerCase();
+    const compact = lower
+      .replace(/[‐‑‒–—−]/g, '-')
+      .replace(/[.\s'"`]/g, '');
+    const noHyphen = compact.replace(/-/g, '');
+    const variants = new Set<string>([trimmed, unquoted, lower, compact, noHyphen]);
+    return Array.from(variants).filter(Boolean);
   };
 
   const userById = useMemo(() => {
@@ -707,6 +936,49 @@ export default function NewMessagePage() {
     return { count: new Set(memberIds).size, label: 'miembros' };
   };
 
+  const availableGroups = useMemo(() => {
+    if (!isTeacher) return groups;
+    if (!allowedGroupIds) return [];
+    const allowed = new Set(allowedGroupIds);
+    return groups.filter((g) => allowed.has(g.id));
+  }, [groups, isTeacher, allowedGroupIds]);
+
+  const teacherAllowedSets = useMemo(() => {
+    if (!isTeacher || !allowedGroupIds) {
+      return { ids: new Set<string>(), emails: new Set<string>(), courseKeys: new Set<string>() };
+    }
+    const allowed = new Set(allowedGroupIds);
+    const studentIdLookup = new Map<string, string>();
+    teacherStudents.forEach((s) => {
+      if (!s?.id) return;
+      memberIdVariants(s.id).forEach((v) => studentIdLookup.set(v, s.id));
+    });
+    const ids = new Set<string>();
+    const emails = new Set<string>();
+    const courseKeys = new Set<string>();
+    groups.forEach((g) => {
+      if (!allowed.has(g.id)) return;
+      if (g.name) {
+        courseKeys.add(courseKey(g.name, g.year || year));
+      }
+      (g.memberIds || []).forEach((m) => {
+        const raw = (m || '').trim();
+        if (!raw) return;
+        if (raw.includes('@')) {
+          emails.add(raw.toLowerCase());
+        } else {
+          const resolved = memberIdVariants(raw)
+            .map((v) => studentIdLookup.get(v))
+            .find((v): v is string => Boolean(v));
+          if (resolved) {
+            ids.add(resolved);
+          }
+        }
+      });
+    });
+    return { ids, emails, courseKeys };
+  }, [groups, isTeacher, allowedGroupIds, teacherStudents, year]);
+
   const filteredUsers = useMemo(() => {
     if (!search.trim()) return users;
     const term = search.toLowerCase();
@@ -718,10 +990,10 @@ export default function NewMessagePage() {
   }, [search, users]);
 
   const filteredGroups = useMemo(() => {
-    if (!groupSearch.trim()) return groups;
+    if (!groupSearch.trim()) return availableGroups;
     const term = groupSearch.toLowerCase();
-    return groups.filter((g) => g.name?.toLowerCase().includes(term));
-  }, [groupSearch, groups]);
+    return availableGroups.filter((g) => g.name?.toLowerCase().includes(term));
+  }, [groupSearch, availableGroups]);
 
   useEffect(() => {
     setUserPage(1);
@@ -752,19 +1024,73 @@ export default function NewMessagePage() {
     return () => clearTimeout(t);
   }, [sendSuccess]);
 
+  useEffect(() => {
+    if (!groupSelectionFeedback) return;
+    const t = setTimeout(() => setGroupSelectionFeedback(null), 3000);
+    return () => clearTimeout(t);
+  }, [groupSelectionFeedback]);
+
+  const teacherFilteredStudents = useMemo(() => {
+    if (!isTeacher) return [];
+    const ids = teacherAllowedSets.ids;
+    const emails = teacherAllowedSets.emails;
+    const courseKeys = teacherAllowedSets.courseKeys;
+    let base = teacherStudents;
+    if (ids.size || emails.size) {
+      base = base.filter((s) => {
+        if (!s) return false;
+        const allowedById = ids.has(s.id);
+        let allowedByEmail = false;
+        if (!allowedById && emails.size > 0) {
+          const studentEmails = [
+            (s.email || '').trim().toLowerCase(),
+            ...guardianEmailsOf(s).map((e) => e.toLowerCase()),
+          ].filter(Boolean);
+          if (studentEmails.some((e) => emails.has(e))) {
+            allowedByEmail = true;
+          }
+        }
+        return allowedById || allowedByEmail;
+      });
+    } else if (allowedGroupIds && allowedGroupIds.length > 0) {
+      base = [];
+    }
+    const term = debouncedStudentSearch?.toLowerCase() || '';
+    if (!term) return base;
+    return base.filter((s) => {
+      const name = `${s.firstName || ''} ${s.lastNameFather || ''} ${s.lastNameMother || ''}`.toLowerCase();
+      const email = (s.email || '').toLowerCase();
+      const guardians = guardianEmailsOf(s).join(' ').toLowerCase();
+      const course = (s.course || '').toLowerCase();
+      return (
+        name.includes(term) ||
+        email.includes(term) ||
+        guardians.includes(term) ||
+        course.includes(term)
+      );
+    });
+  }, [isTeacher, teacherStudents, teacherAllowedSets, debouncedStudentSearch, allowedGroupIds]);
+
+  const effectiveStudentsTotal = isTeacher ? teacherFilteredStudents.length : studentsTotal;
+
   const userTotalPages = Math.max(1, Math.ceil(filteredUsers.length / userPageSize));
   const paginatedUsers = useMemo(() => {
     const start = (userPage - 1) * userPageSize;
     return filteredUsers.slice(start, start + userPageSize);
   }, [filteredUsers, userPage, userPageSize]);
 
+  const studentTotalPages = Math.max(1, Math.ceil(effectiveStudentsTotal / studentPageSize));
+  const paginatedStudents = useMemo(() => {
+    if (!isTeacher) return students;
+    const start = (studentPage - 1) * studentPageSize;
+    return teacherFilteredStudents.slice(start, start + studentPageSize);
+  }, [isTeacher, teacherFilteredStudents, studentPage, studentPageSize, students]);
+
   const selectedRecipients = useMemo(
     () => users.filter((u) => selectedUserIds.includes(u.id)),
     [users, selectedUserIds]
   );
 
-  const studentTotalPages = Math.max(1, Math.ceil(studentsTotal / studentPageSize));
-  const paginatedStudents = students;
   const selectedGroupRecipients = useMemo(
     () => groups.filter((g) => selectedGroups.includes(g.id)),
     [groups, selectedGroups]
@@ -1289,7 +1615,7 @@ export default function NewMessagePage() {
                 <h2 className="text-lg font-semibold text-gray-900">3. Destinatarios</h2>
                 {(selectedUserIds.length > 0 || selectedStudentIds.length > 0 || selectedGroups.length > 0) && (
                   <span className="text-xs text-gray-600">
-                    {selectedUserIds.length + selectedStudentIds.length} persona(s) • {selectedGroups.length} grupo(s)
+                    {selectedStudentIds.length} estudiante(s) • {selectedUserIds.length} usuario(s) • {selectedGroups.length} grupo(s)
                   </span>
                 )}
               </div>
@@ -1315,7 +1641,18 @@ export default function NewMessagePage() {
                       Seleccionados: {selectedGroups.length}
                     </span>
                   </div>
-                  {loadingGroups && <p className="text-sm text-gray-500">Cargando grupos...</p>}
+                  {groupSelectionFeedback && (
+                    <div
+                      className={`rounded-lg border px-3 py-2 text-xs ${
+                        groupSelectionFeedback.type === 'add'
+                          ? 'border-green-200 bg-green-50 text-green-700'
+                          : 'border-amber-200 bg-amber-50 text-amber-700'
+                      }`}
+                    >
+                      {groupSelectionFeedback.text}
+                    </div>
+                  )}
+                  {(loadingGroups || loadingAllowedGroups) && <p className="text-sm text-gray-500">Cargando grupos...</p>}
                   {groupsError && <p className="text-sm text-red-600">{groupsError}</p>}
                   {!loadingGroups && !groupsError && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -1350,10 +1687,10 @@ export default function NewMessagePage() {
                           </div>
                         </label>
                       ))}
-                      {!groups.length && (
+                      {!availableGroups.length && (
                         <p className="text-sm text-gray-500 col-span-2">No hay grupos disponibles.</p>
                       )}
-                      {groups.length > 0 && !filteredGroups.length && (
+                      {availableGroups.length > 0 && !filteredGroups.length && (
                         <p className="text-sm text-gray-500 col-span-2">Sin coincidencias para la búsqueda.</p>
                       )}
                     </div>
@@ -1375,7 +1712,7 @@ export default function NewMessagePage() {
                       </div>
                     </div>
                     <div className="text-xs text-gray-500 flex flex-col items-start sm:items-end">
-                      <span>{studentsTotal} total</span>
+                      <span>{effectiveStudentsTotal} total</span>
                       <span>Mostrando página {studentPage} de {studentTotalPages}</span>
                     </div>
                   </div>
@@ -1410,10 +1747,12 @@ export default function NewMessagePage() {
                           </div>
                         </label>
                       ))}
-                        {!students.length && (
-                          <p className="text-sm text-gray-500 col-span-2">No hay estudiantes disponibles.</p>
+                        {effectiveStudentsTotal === 0 && (
+                          <p className="text-sm text-gray-500 col-span-2">
+                            {isTeacher ? 'No hay estudiantes permitidos para tus grupos asignados.' : 'No hay estudiantes disponibles.'}
+                          </p>
                         )}
-                        {studentsTotal > 0 && !paginatedStudents.length && (
+                        {effectiveStudentsTotal > 0 && !paginatedStudents.length && (
                           <p className="text-sm text-gray-500 col-span-2">Sin coincidencias para la búsqueda.</p>
                         )}
                       </div>
@@ -1520,7 +1859,7 @@ export default function NewMessagePage() {
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-0.5">
                       <p className="font-semibold text-gray-900 text-sm">
-                        Destinatarios seleccionados ({allSelectedRecipients.length + selectedGroups.length})
+                        Destinatarios seleccionados ({allSelectedRecipients.length})
                       </p>
                       {!!(allSelectedRecipients.length + selectedGroups.length) && (
                         <p className="text-xs text-gray-500">

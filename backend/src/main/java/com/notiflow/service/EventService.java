@@ -6,10 +6,11 @@ import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QueryDocumentSnapshot;
 import com.google.cloud.firestore.QuerySnapshot;
-import com.google.cloud.firestore.FieldPath;
 import com.notiflow.dto.EventDto;
 import com.notiflow.dto.EventRequest;
 import com.notiflow.model.EventDocument;
+import com.notiflow.model.StudentDocument;
+import com.notiflow.model.UserDocument;
 import com.notiflow.util.CurrentUser;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -28,19 +29,44 @@ public class EventService {
 
     private final Firestore firestore;
     private final GroupService groupService;
+    private final TeacherPermissionService teacherPermissionService;
+    private final UserService userService;
+    private final StudentService studentService;
 
-    public EventService(Firestore firestore, GroupService groupService) {
+    public EventService(Firestore firestore, GroupService groupService, TeacherPermissionService teacherPermissionService, UserService userService, StudentService studentService) {
         this.firestore = firestore;
         this.groupService = groupService;
+        this.teacherPermissionService = teacherPermissionService;
+        this.userService = userService;
+        this.studentService = studentService;
     }
 
-    public List<EventDto> listForUser(CurrentUser user, String fromIso, String toIso, String type, int page, int pageSize) {
+    public List<EventDto> listForUser(CurrentUser user, String fromIso, String toIso, String type, int page, int pageSize, String studentId) {
         int safePage = Math.max(1, page);
         int safeSize = Math.min(Math.max(1, pageSize), 200);
         Query query = firestore.collectionGroup("events");
+        String role = user.role() != null ? user.role().toUpperCase() : "";
+        boolean isTeacher = role.equals("TEACHER");
+        String teacherUserId = null;
+        if (isTeacher && user.email() != null) {
+            teacherUserId = userService.findByEmail(user.email()).map(UserDocument::getId).orElse(null);
+        }
+        StudentDocument selectedStudent = null;
+        if (shouldRestrictToAudience(user) && studentId != null && !studentId.isBlank() && studentService != null) {
+            selectedStudent = studentService.findById(studentId).orElse(null);
+            if (selectedStudent == null || !isLinkedToStudent(selectedStudent, user.email())) {
+                return List.of();
+            }
+        }
+        List<String> allowedGroups = isTeacher
+                ? teacherPermissionService.getAllowedGroups(user.schoolId(), user.email())
+                : List.of();
 
         // scope por colegio, salvo superadmin (schoolId global)
-        if (user.schoolId() != null && !"global".equalsIgnoreCase(user.schoolId())) {
+        boolean restrictSchool = !shouldRestrictToAudience(user);
+        if (selectedStudent != null && selectedStudent.getSchoolId() != null && !selectedStudent.getSchoolId().isBlank()) {
+            query = query.whereEqualTo("schoolId", selectedStudent.getSchoolId());
+        } else if (restrictSchool && user.schoolId() != null && !"global".equalsIgnoreCase(user.schoolId())) {
             query = query.whereEqualTo("schoolId", user.schoolId());
         }
         if (type != null && !type.isBlank()) {
@@ -68,11 +94,19 @@ public class EventService {
                 return toDto(ev);
             }).collect(Collectors.toList());
 
+            if (isTeacher) {
+                final String email = user.email();
+                final String uid = teacherUserId;
+                return all.stream()
+                        .filter(ev -> isTeacherEvent(ev, email, uid, allowedGroups))
+                        .collect(Collectors.toList());
+            }
+
             // Filtrado por audiencia para guardian/student u otros roles sin permiso explícito
             if (shouldRestrictToAudience(user)) {
-                List<String> myGroupIds = groupService.findGroupsForMember(user.email(), user.schoolId());
+                AudienceContext ctx = resolveAudienceContext(user, studentId);
                 return all.stream()
-                        .filter(ev -> isAudience(user.email(), myGroupIds, ev))
+                        .filter(ev -> isAudience(ctx.audienceKeys, ctx.groupIds, ev))
                         .collect(Collectors.toList());
             }
 
@@ -93,10 +127,17 @@ public class EventService {
                     ev.setId(doc.getId());
                     return toDto(ev);
                 }).collect(Collectors.toList());
-                if (shouldRestrictToAudience(user)) {
-                    List<String> myGroupIds = groupService.findGroupsForMember(user.email(), user.schoolId());
+                if (isTeacher) {
+                    final String email = user.email();
+                    final String uid = teacherUserId;
                     return all.stream()
-                            .filter(ev -> isAudience(user.email(), myGroupIds, ev))
+                            .filter(ev -> isTeacherEvent(ev, email, uid, allowedGroups))
+                            .collect(Collectors.toList());
+                }
+                if (shouldRestrictToAudience(user)) {
+                    AudienceContext ctx = resolveAudienceContext(user, studentId);
+                    return all.stream()
+                            .filter(ev -> isAudience(ctx.audienceKeys, ctx.groupIds, ev))
                             .collect(Collectors.toList());
                 }
                 return all;
@@ -182,9 +223,16 @@ public class EventService {
         return role.equals("GUARDIAN") || role.equals("STUDENT");
     }
 
-    private boolean isAudience(String email, List<String> groupIds, EventDto ev) {
-        if (email == null || email.isBlank()) return false;
-        if (ev.audienceUserIds() != null && ev.audienceUserIds().contains(email)) return true;
+    private boolean isAudience(List<String> audienceKeys, List<String> groupIds, EventDto ev) {
+        if (audienceKeys == null || audienceKeys.isEmpty()) return false;
+        if (ev.audienceUserIds() != null && !ev.audienceUserIds().isEmpty()) {
+            for (String key : audienceKeys) {
+                if (key == null || key.isBlank()) continue;
+                for (String aud : ev.audienceUserIds()) {
+                    if (matchesAudienceKey(aud, key)) return true;
+                }
+            }
+        }
         if (ev.audienceGroupIds() != null && !ev.audienceGroupIds().isEmpty()) {
             for (String gid : ev.audienceGroupIds()) {
                 if (groupIds.contains(gid)) return true;
@@ -194,16 +242,82 @@ public class EventService {
         return false;
     }
 
+    private boolean matchesAudienceKey(String aud, String key) {
+        if (aud == null || key == null) return false;
+        String a = aud.trim();
+        String k = key.trim();
+        if (a.isEmpty() || k.isEmpty()) return false;
+        boolean emailLike = a.contains("@") || k.contains("@");
+        return emailLike ? a.equalsIgnoreCase(k) : a.equals(k);
+    }
+
+    private record AudienceContext(List<String> audienceKeys, List<String> groupIds) {}
+
+    private AudienceContext resolveAudienceContext(CurrentUser user, String studentId) {
+        if (user == null || user.email() == null || user.email().isBlank()) {
+            return new AudienceContext(List.of(), List.of());
+        }
+        String email = user.email().trim().toLowerCase();
+        if (studentId != null && !studentId.isBlank()) {
+            StudentDocument student = studentService != null ? studentService.findById(studentId).orElse(null) : null;
+            if (student == null) {
+                return new AudienceContext(List.of(), List.of());
+            }
+            if (!isLinkedToStudent(student, email)) {
+                return new AudienceContext(List.of(), List.of());
+            }
+            java.util.Set<String> keys = new java.util.HashSet<>();
+            keys.add(student.getId());
+            if (student.getEmail() != null && !student.getEmail().isBlank()) {
+                keys.add(student.getEmail().trim().toLowerCase());
+            }
+            keys.add(email);
+            List<String> groups = resolveGroupIdsForKeys(keys, student.getSchoolId());
+            return new AudienceContext(new ArrayList<>(keys), groups);
+        }
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        keys.add(email);
+        if (studentService != null) {
+            List<StudentDocument> linked = studentService.findAllByEmail(email);
+            for (StudentDocument s : linked) {
+                if (s == null) continue;
+                if (s.getId() != null && !s.getId().isBlank()) {
+                    keys.add(s.getId());
+                }
+                if (s.getEmail() != null && !s.getEmail().isBlank()) {
+                    keys.add(s.getEmail().trim().toLowerCase());
+                }
+            }
+        }
+        List<String> groups = resolveGroupIdsForKeys(keys, user.schoolId());
+        return new AudienceContext(new ArrayList<>(keys), groups);
+    }
+
+    private boolean isLinkedToStudent(StudentDocument student, String email) {
+        if (student == null || email == null || email.isBlank()) return false;
+        String normalized = email.trim().toLowerCase();
+        if (student.getEmail() != null && student.getEmail().equalsIgnoreCase(normalized)) {
+            return true;
+        }
+        if (student.getGuardianEmails() != null) {
+            return student.getGuardianEmails().stream().anyMatch(g -> g != null && g.equalsIgnoreCase(normalized));
+        }
+        return false;
+    }
+
+    private List<String> resolveGroupIdsForKeys(java.util.Set<String> keys, String schoolId) {
+        if (keys == null || keys.isEmpty()) return List.of();
+        java.util.Set<String> groups = new java.util.HashSet<>();
+        String targetSchool = (schoolId == null || schoolId.isBlank()) ? "global" : schoolId;
+        for (String key : keys) {
+            if (key == null || key.isBlank()) continue;
+            groups.addAll(groupService.findGroupsForMember(key, targetSchool));
+        }
+        return new ArrayList<>(groups);
+    }
+
     public EventDto create(EventRequest request, CurrentUser user) {
         String role = user.role() != null ? user.role().toUpperCase() : "";
-        boolean canCreate = role.equals("SUPERADMIN")
-                || role.equals("ADMIN")
-                || role.equals("TEACHER")
-                || role.equals("COORDINATOR")
-                || role.equals("GESTION_ESCOLAR");
-        if (!canCreate) {
-            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "No tienes permisos para crear eventos");
-        }
         String schoolId = request.schoolId() != null && !request.schoolId().isBlank()
                 ? request.schoolId()
                 : user.schoolId();
@@ -231,8 +345,22 @@ public class EventService {
 
         List<String> audUsers = request.audience() != null ? request.audience().userIds() : null;
         List<String> audGroups = request.audience() != null ? request.audience().groupIds() : null;
-        ev.setAudienceUserIds(normalizeList(audUsers));
-        ev.setAudienceGroupIds(normalizeList(audGroups));
+        List<String> normalizedUsers = normalizeList(audUsers);
+        List<String> normalizedGroups = normalizeList(audGroups);
+
+        if (role.equals("TEACHER") && !normalizedGroups.isEmpty()) {
+            List<String> allowed = teacherPermissionService.getAllowedGroups(schoolId, user.email());
+            if (allowed == null || allowed.isEmpty()) {
+                throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "No tienes permisos para enviar a estos grupos");
+            }
+            boolean subset = normalizedGroups.stream().allMatch(allowed::contains);
+            if (!subset) {
+                throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "No puedes enviar a grupos fuera de tus permisos");
+            }
+        }
+
+        ev.setAudienceUserIds(normalizedUsers);
+        ev.setAudienceGroupIds(normalizedGroups);
 
         if ((ev.getAudienceUserIds() == null || ev.getAudienceUserIds().isEmpty()) &&
                 (ev.getAudienceGroupIds() == null || ev.getAudienceGroupIds().isEmpty())) {
@@ -253,7 +381,10 @@ public class EventService {
         if (list == null) return new ArrayList<>();
         return list.stream()
                 .filter(s -> s != null && !s.isBlank())
-                .map(String::trim)
+                .map(s -> {
+                    String trimmed = s.trim();
+                    return trimmed.contains("@") ? trimmed.toLowerCase() : trimmed;
+                })
                 .distinct()
                 .collect(Collectors.toList());
     }
@@ -265,6 +396,24 @@ public class EventService {
         } catch (DateTimeParseException ex) {
             return Optional.empty();
         }
+    }
+
+    private boolean isTeacherEvent(EventDto ev, String email, String userId, List<String> allowedGroups) {
+        if (email != null && ev.createdByEmail() != null && ev.createdByEmail().equalsIgnoreCase(email)) {
+            return true;
+        }
+        List<String> audUsers = ev.audienceUserIds();
+        if (audUsers != null) {
+            if (email != null && audUsers.contains(email)) return true;
+            if (userId != null && audUsers.contains(userId)) return true;
+        }
+        List<String> audGroups = ev.audienceGroupIds();
+        if (audGroups != null && allowedGroups != null && !allowedGroups.isEmpty()) {
+            for (String g : audGroups) {
+                if (allowedGroups.contains(g)) return true;
+            }
+        }
+        return false;
     }
 
     private EventDto toDto(EventDocument ev) {

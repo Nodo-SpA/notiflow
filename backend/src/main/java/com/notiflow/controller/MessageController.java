@@ -39,10 +39,39 @@ public class MessageController {
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
             @RequestParam(value = "q", required = false) String query,
-            @RequestParam(value = "self", defaultValue = "false") boolean self
+            @RequestParam(value = "self", defaultValue = "false") boolean self,
+            @RequestParam(value = "studentId", required = false) String studentId
     ) {
         CurrentUser user = CurrentUser.fromContext()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        String role = user.role() == null ? "" : user.role().toLowerCase();
+        if ("teacher".equals(role)) {
+            boolean isGlobal = user.isGlobalAdmin() || user.isSuperAdmin();
+            return ResponseEntity.ok(messageService.list(
+                    user.schoolId(),
+                    isGlobal,
+                    year,
+                    user.email(),
+                    null,
+                    query,
+                    page,
+                    pageSize,
+                    null
+            ));
+        }
+        if ("student".equals(role) || "guardian".equals(role)) {
+            return ResponseEntity.ok(messageService.list(
+                    null,
+                    true,
+                    year,
+                    null,
+                    user.email(),
+                    query,
+                    page,
+                    pageSize,
+                    studentId
+            ));
+        }
         // Permite mensajes.list o mensajes.list.self (filtrando por remitente)
         String senderFilter = null;
         String recipientFilter = null;
@@ -57,7 +86,7 @@ public class MessageController {
             recipientFilter = user.email();
         }
         boolean isGlobal = user.isGlobalAdmin() || user.isSuperAdmin();
-        return ResponseEntity.ok(messageService.list(user.schoolId(), isGlobal, year, senderFilter, recipientFilter, query, page, pageSize));
+        return ResponseEntity.ok(messageService.list(user.schoolId(), isGlobal, year, senderFilter, recipientFilter, query, page, pageSize, null));
     }
 
     @PostMapping

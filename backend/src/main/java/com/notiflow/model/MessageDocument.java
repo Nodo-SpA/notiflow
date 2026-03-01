@@ -21,6 +21,7 @@ public class MessageDocument {
     private Instant createdAt;
     private Instant scheduledAt;
     private List<String> groupIds;
+    private List<String> studentIds;
     private List<AttachmentMetadata> attachments;
     private String reason;
     // destinatarios que ya leyeron en la app
@@ -173,6 +174,14 @@ public class MessageDocument {
 
     public void setGroupIds(List<String> groupIds) {
         this.groupIds = groupIds;
+    }
+
+    public List<String> getStudentIds() {
+        return studentIds;
+    }
+
+    public void setStudentIds(List<String> studentIds) {
+        this.studentIds = studentIds;
     }
 
     public List<AttachmentMetadata> getAttachments() {

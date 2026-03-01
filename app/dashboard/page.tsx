@@ -19,10 +19,11 @@ export default function DashboardPage() {
   const effectiveYear = year || currentYear;
   const hasPermission = useAuthStore((state) => state.hasPermission);
   const currentUser = useAuthStore((state) => state.user);
+  const isTeacher = (currentUser?.role || '').toLowerCase() === 'teacher';
   const canCreateMessage = hasPermission('messages.create');
-  const canSeeMessages = hasPermission('messages.list');
+  const canSeeMessages = isTeacher || hasPermission('messages.list');
   const canSeeReports = hasPermission('reports.view');
-  const canSeeUsers = hasPermission('users.list');
+  const canSeeUsers = !isTeacher && hasPermission('users.list');
   const canSeeStudents =
     hasPermission('students.list') ||
     hasPermission('students.create') ||
@@ -30,6 +31,7 @@ export default function DashboardPage() {
     hasPermission('students.delete');
   const isSuperAdmin = (currentUser?.role || '').toLowerCase() === 'superadmin' || hasPermission('*');
   const [messages, setMessages] = useState<MessageItem[]>([]);
+  const [messageTotal, setMessageTotal] = useState(0);
   const [users, setUsers] = useState<UserItem[]>([]);
   const [schools, setSchools] = useState<SchoolItem[]>([]);
   const [studentCount, setStudentCount] = useState(0);
@@ -40,8 +42,42 @@ export default function DashboardPage() {
     const load = async () => {
       setLoading(true);
       try {
-        const msgPromise = apiClient.getMessages({ year: effectiveYear });
-        const usrPromise = canSeeUsers ? apiClient.getUsers() : Promise.resolve({ data: [] });
+        const fetchAllMessages = async () => {
+          const all: MessageItem[] = [];
+          const pageSize = 100;
+          let page = 1;
+          let hasMore = true;
+          while (hasMore) {
+            const res = await apiClient.getMessages({ year: effectiveYear, page, pageSize });
+            const data = res.data || {};
+            const chunk = ((data as any).items ?? data ?? []) as MessageItem[];
+            if (!Array.isArray(chunk) || chunk.length === 0) break;
+            all.push(...chunk);
+            hasMore = (data as any).hasMore === true;
+            if (!hasMore) break;
+            page += 1;
+            if (page > 100) break;
+          }
+          return all;
+        };
+        const fetchAllUsers = async () => {
+          const all: UserItem[] = [];
+          const pageSize = 100;
+          let page = 1;
+          while (true) {
+            const res = await apiClient.getUsers({ page, pageSize });
+            const raw = res.data;
+            const chunk = (Array.isArray(raw) ? raw : (raw as any)?.items || []) as UserItem[];
+            if (!chunk.length) break;
+            all.push(...chunk);
+            if (chunk.length < pageSize) break;
+            page += 1;
+            if (page > 50) break;
+          }
+          return all;
+        };
+        const msgPromise = fetchAllMessages();
+        const usrPromise = canSeeUsers ? fetchAllUsers() : Promise.resolve([]);
         const studentPromise = canSeeStudents
           ? apiClient.getStudents({ page: 1, pageSize: 1, year: effectiveYear })
           : Promise.resolve({ data: { items: [], total: 0 } });
@@ -54,10 +90,10 @@ export default function DashboardPage() {
           schPromise,
           usagePromise,
         ]);
-        const msgData = msgRes.data || {};
-        const msgItems = (msgData as any).items ?? msgData ?? [];
+        const msgItems = (msgRes as MessageItem[]) || [];
         setMessages(msgItems);
-        setUsers(usrRes.data || []);
+        setMessageTotal(msgItems.length);
+        setUsers((usrRes as UserItem[]) || []);
         const studentData = studentRes.data || {};
         const studentTotal = studentData.total ?? studentData.items?.length ?? 0;
         setStudentCount(studentTotal);
@@ -75,7 +111,7 @@ export default function DashboardPage() {
 
   const stats = useMemo(
     () => {
-      const base = [{ label: `Mensajes ${effectiveYear}`, value: messages.length }];
+      const base = [{ label: `Mensajes ${effectiveYear}`, value: messageTotal }];
       if (canSeeStudents) {
         base.push({ label: `Estudiantes ${effectiveYear}`, value: studentCount });
       }
@@ -88,7 +124,7 @@ export default function DashboardPage() {
       }
       return base;
     },
-    [messages.length, users, canSeeUsers, canSeeStudents, studentCount, effectiveYear]
+    [messageTotal, users, canSeeUsers, canSeeStudents, studentCount, effectiveYear]
   );
 
   const schoolBreakdown = useMemo(() => {

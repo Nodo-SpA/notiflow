@@ -27,6 +27,11 @@ public class TeacherPermissionController {
     public ResponseEntity<List<TeacherPermissionDto>> list() {
         CurrentUser user = CurrentUser.fromContext()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        if (user.role() != null && user.role().equalsIgnoreCase("teacher")) {
+            String schoolId = user.schoolId();
+            List<String> allowed = teacherPermissionService.getAllowedGroups(schoolId, user.email());
+            return ResponseEntity.ok(List.of(new TeacherPermissionDto(user.email(), allowed)));
+        }
         // Solo admin/superadmin/coordinador con permiso de users.manage (o similar)
         accessControlService.check(user, "users.create", user.schoolId(), Optional.empty());
         String schoolId = user.schoolId();

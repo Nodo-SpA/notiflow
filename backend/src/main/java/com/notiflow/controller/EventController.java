@@ -2,6 +2,7 @@ package com.notiflow.controller;
 
 import com.notiflow.dto.EventDto;
 import com.notiflow.dto.EventRequest;
+import com.notiflow.service.AccessControlService;
 import com.notiflow.service.EventService;
 import com.notiflow.util.CurrentUser;
 import jakarta.validation.Valid;
@@ -10,15 +11,18 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/events")
 public class EventController {
 
     private final EventService eventService;
+    private final AccessControlService accessControlService;
 
-    public EventController(EventService eventService) {
+    public EventController(EventService eventService, AccessControlService accessControlService) {
         this.eventService = eventService;
+        this.accessControlService = accessControlService;
     }
 
     @GetMapping
@@ -26,18 +30,23 @@ public class EventController {
             @RequestParam(value = "from", required = false) String fromIso,
             @RequestParam(value = "to", required = false) String toIso,
             @RequestParam(value = "type", required = false) String type,
+            @RequestParam(value = "studentId", required = false) String studentId,
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "pageSize", defaultValue = "100") int pageSize
     ) {
         CurrentUser user = CurrentUser.fromContext()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
-        return ResponseEntity.ok(eventService.listForUser(user, fromIso, toIso, type, page, pageSize));
+        return ResponseEntity.ok(eventService.listForUser(user, fromIso, toIso, type, page, pageSize, studentId));
     }
 
     @PostMapping
     public ResponseEntity<EventDto> create(@Valid @RequestBody EventRequest request) {
         CurrentUser user = CurrentUser.fromContext()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        String targetSchool = (request.schoolId() != null && !request.schoolId().isBlank())
+                ? request.schoolId()
+                : user.schoolId();
+        accessControlService.check(user, "events.create", targetSchool, Optional.ofNullable(user.email()));
         return ResponseEntity.ok(eventService.create(request, user));
     }
 

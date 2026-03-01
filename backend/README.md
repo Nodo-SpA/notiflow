@@ -6,7 +6,7 @@ Backend para Notiflow con Spring Boot 3, JWT y Firestore. Incluye gestión de us
 - Java 21, Spring Boot 3 (Web, Security, Validation, Actuator)
 - Firestore con `spring-cloud-gcp-starter-data-firestore`
 - JWT con `jjwt`
-- SendGrid (opcional) para envío de emails de recuperación
+- SendGrid (opcional) para envío de emails (recomendado si SES está en sandbox)
 
 ## Ejecutar en local
 ```bash
@@ -27,8 +27,10 @@ mvn -Dmaven.repo.local=./.m2 -Dmaven.test.skip=true spring-boot:run
 - `APP_ADMIN_EMAIL` / `APP_ADMIN_PASSWORD` / `APP_ADMIN_SCHOOL_ID` semilla opcional de admin (school-id `global` permite crear en cualquier colegio)
 - `APP_FRONTEND_URL` URL base para armar el enlace de reset (ej: `https://hectorguzman.github.io/notiflow`)
 - `APP_MAIL_FROM` remitente de correos (ej: `no-reply@notiflow.app`)
-- `SENDGRID_API_KEY` API key para enviar el mail de recuperación. Si no está, el endpoint devuelve el token en la respuesta (solo para pruebas).
+- `SENDGRID_API_KEY` API key para enviar emails. Si está configurada, se usa SendGrid (prioridad sobre SES).
 - `APP_PASSWORD_RESET_EXPIRES_MINUTES` minutos de vigencia del token (default 30)
+- `OTP_REVIEWER_EMAILS` lista de correos (separados por coma) con código fijo para revisión (Play Console)
+- `OTP_REVIEWER_CODE` código fijo (4-6 dígitos) para los correos en `OTP_REVIEWER_EMAILS` (default `000000`)
 
 ## Endpoints principales
 - `POST /auth/login` → `{ token, user }`

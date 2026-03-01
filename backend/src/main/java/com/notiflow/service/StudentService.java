@@ -12,7 +12,9 @@ import com.notiflow.dto.StudentListResponse;
 import com.notiflow.dto.StudentRequest;
 import com.notiflow.dto.GuardianContact;
 import com.notiflow.model.StudentDocument;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +38,7 @@ public class StudentService {
 
     public StudentDto create(StudentRequest request, String schoolId) {
         try {
+            validateRequiredFields(request);
             StudentDocument s = new StudentDocument();
             s.setSchoolId(schoolId);
             s.setYear(String.valueOf(java.time.Year.now().getValue()));
@@ -95,6 +98,7 @@ public class StudentService {
 
     public StudentDto update(String id, StudentRequest request, String requesterSchoolId, boolean isGlobalAdmin) {
         try {
+            validateRequiredFields(request);
             var currentRef = firestore.collectionGroup("students")
                     .whereEqualTo("id", id)
                     .limit(1)
@@ -153,6 +157,119 @@ public class StudentService {
             }
             throw new RuntimeException("Error actualizando estudiante", e);
         }
+    }
+
+    public List<StudentDocument> listAllBySchoolAndYear(String schoolId, String year) {
+        try {
+            Query q = tenantStudents(schoolId);
+            if (year != null && !year.isBlank()) {
+                q = q.whereEqualTo("year", year);
+            }
+            List<QueryDocumentSnapshot> docs = q.get().get().getDocuments();
+            List<StudentDocument> result = new ArrayList<>();
+            for (QueryDocumentSnapshot doc : docs) {
+                StudentDocument s = doc.toObject(StudentDocument.class);
+                if (s == null) continue;
+                s.setId(doc.getId());
+                result.add(s);
+            }
+            return result;
+        } catch (InterruptedException | ExecutionException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            log.warn("Error listando estudiantes para grupos: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    public java.util.Optional<StudentDto> getById(String id) {
+        if (id == null || id.isBlank()) return java.util.Optional.empty();
+        try {
+            QuerySnapshot snap = firestore.collectionGroup("students")
+                    .whereEqualTo("id", id)
+                    .limit(1)
+                    .get()
+                    .get();
+            if (snap.isEmpty()) return java.util.Optional.empty();
+            QueryDocumentSnapshot doc = snap.getDocuments().get(0);
+            StudentDocument s = doc.toObject(StudentDocument.class);
+            if (s == null) return java.util.Optional.empty();
+            s.setId(doc.getId());
+            return java.util.Optional.of(toDto(s));
+        } catch (InterruptedException | ExecutionException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            log.warn("Error obteniendo estudiante {}: {}", id, e.getMessage());
+            return java.util.Optional.empty();
+        }
+    }
+
+    public void delete(String id, String requesterSchoolId, boolean isGlobalAdmin) {
+        if (id == null || id.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ID requerido");
+        }
+        try {
+            QuerySnapshot snap = firestore.collectionGroup("students")
+                    .whereEqualTo("id", id)
+                    .limit(1)
+                    .get()
+                    .get();
+            if (snap.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Estudiante no encontrado");
+            }
+            QueryDocumentSnapshot doc = snap.getDocuments().get(0);
+            StudentDocument s = doc.toObject(StudentDocument.class);
+            if (s == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Estudiante inválido");
+            }
+            String targetSchool = s.getSchoolId() == null || s.getSchoolId().isBlank() ? "global" : s.getSchoolId();
+            if (!isGlobalAdmin && requesterSchoolId != null && !requesterSchoolId.equalsIgnoreCase(targetSchool)) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No puedes eliminar estudiantes de otro colegio");
+            }
+            doc.getReference().delete().get();
+        } catch (InterruptedException | ExecutionException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw new RuntimeException("Error eliminando estudiante", e);
+        }
+    }
+
+    private void validateRequiredFields(StudentRequest request) {
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Datos del estudiante inválidos");
+        }
+        if (isBlank(request.firstName())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nombres es obligatorio");
+        }
+        if (isBlank(request.lastNameFather())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Apellido paterno es obligatorio");
+        }
+        if (isBlank(request.lastNameMother())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Apellido materno es obligatorio");
+        }
+        if (isBlank(request.course())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Curso es obligatorio");
+        }
+        if (request.guardians() == null || request.guardians().isEmpty() || !hasGuardianData(request.guardians())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Debes agregar al menos un apoderado");
+        }
+    }
+
+    private boolean hasGuardianData(List<GuardianContact> guardians) {
+        for (GuardianContact g : guardians) {
+            if (g == null) continue;
+            if (!isBlank(g.getName()) || !isBlank(g.getEmail()) || !isBlank(g.getPhone())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     private StudentDto toDto(StudentDocument s) {
@@ -309,7 +426,9 @@ public class StudentService {
             }
             return result;
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             log.warn("Error consultando estudiantes por email {}: {}", email, e.getMessage());
             return java.util.Collections.emptyList();
         }
@@ -321,6 +440,29 @@ public class StudentService {
         List<StudentDocument> all = findAllByEmail(normalized);
         if (all.isEmpty()) return java.util.Optional.empty();
         return java.util.Optional.ofNullable(all.get(0));
+    }
+
+    public java.util.Optional<StudentDocument> findById(String id) {
+        if (id == null || id.isBlank()) return java.util.Optional.empty();
+        try {
+            QuerySnapshot snap = firestore.collectionGroup("students")
+                    .whereEqualTo("id", id)
+                    .limit(1)
+                    .get()
+                    .get();
+            if (snap.isEmpty()) return java.util.Optional.empty();
+            QueryDocumentSnapshot doc = snap.getDocuments().get(0);
+            StudentDocument s = doc.toObject(StudentDocument.class);
+            if (s == null) return java.util.Optional.empty();
+            s.setId(doc.getId());
+            return java.util.Optional.of(s);
+        } catch (InterruptedException | ExecutionException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            log.warn("Error consultando estudiante por id {}: {}", id, e.getMessage());
+            return java.util.Optional.empty();
+        }
     }
 
     private String defaultValue(String value, String fallback) {
@@ -343,9 +485,6 @@ public class StudentService {
             for (QueryDocumentSnapshot doc : docs) {
                 StudentDocument s = doc.toObject(StudentDocument.class);
                 if (s == null) continue;
-                if (s.getEmail() != null && !s.getEmail().isBlank()) {
-                    emails.add(normalizeEmail(s.getEmail()));
-                }
                 List<String> guardianEmails = s.getGuardianEmails() == null ? java.util.Collections.emptyList() : s.getGuardianEmails();
                 guardianEmails.stream()
                         .filter(e -> e != null && !e.isBlank())
@@ -366,7 +505,9 @@ public class StudentService {
                     .distinct()
                     .toList();
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error recopilando correos de estudiantes/apoderados", e);
         }
     }

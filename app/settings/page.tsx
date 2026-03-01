@@ -191,8 +191,32 @@ Información sensible no académica`;
     setLoadingUsers(true);
     setError('');
     try {
-      const res = await apiClient.getUsers(query ? { q: query } : undefined);
-      setUsers(res.data || []);
+      const all: UserListItem[] = [];
+      const pageSize = 100;
+      let page = 1;
+      while (true) {
+        const res = await apiClient.getUsers({ page, pageSize });
+        const raw = res.data;
+        const chunk = (Array.isArray(raw) ? raw : (raw as any)?.items || []) as UserListItem[];
+        if (!chunk.length) break;
+        all.push(...chunk);
+        if (chunk.length < pageSize) break;
+        page += 1;
+        if (page > 50) break;
+      }
+      if (query && query.trim()) {
+        const term = query.toLowerCase();
+        setUsers(
+          all.filter(
+            (u) =>
+              (u.name || '').toLowerCase().includes(term) ||
+              (u.email || '').toLowerCase().includes(term) ||
+              (u.role || '').toLowerCase().includes(term)
+          )
+        );
+      } else {
+        setUsers(all);
+      }
     } catch (err: any) {
       const msg =
         err?.response?.data?.message ||
@@ -1161,9 +1185,19 @@ Información sensible no académica`;
         size="xl"
       >
         <form className="space-y-4" onSubmit={handleImportStudents}>
-          <p className="text-sm text-gray-600">
-            Encabezados esperados: Año, Curso, RUN, Genero, Nombres, Apellido Paterno, Apellido Materno, Direccion, Comuna Residencia, Email, Celular.
-          </p>
+          <div className="text-sm text-gray-600 space-y-2">
+            <p>
+              Encabezados esperados (obligatorios): Año, Curso, RUN, Genero, Nombres, Apellido Paterno, Apellido Materno,
+              Direccion, Comuna Residencia, Email, Celular.
+            </p>
+            <p>
+              Apoderados (al menos 1 por alumno): Apoderado 1 Nombre, Apoderado 1 Email, Apoderado 1 Telefono.
+              Opcionales: Apoderado 2 Nombre/Email/Telefono, Apoderado 3 Nombre/Email/Telefono.
+            </p>
+            <p className="text-xs text-gray-500">
+              También se acepta la variante simple: Apoderado Nombre, Apoderado Email, Apoderado Telefono.
+            </p>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Colegio destino</label>

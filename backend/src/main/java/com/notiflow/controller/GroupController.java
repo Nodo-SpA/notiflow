@@ -87,4 +87,26 @@ public class GroupController {
         groupService.delete(id, user.schoolId(), "global".equalsIgnoreCase(user.schoolId()));
         return ResponseEntity.noContent().build();
     }
+
+    @PostMapping("/rebuild-courses")
+    public ResponseEntity<?> rebuildCourses(
+            @RequestParam(value = "schoolId", required = false) String schoolId,
+            @RequestParam(value = "year", required = false) String year
+    ) {
+        CurrentUser user = CurrentUser.fromContext()
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        String role = user.role() != null ? user.role().toUpperCase() : "";
+        if (!"SUPERADMIN".equals(role) && !"ADMIN".equals(role)) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "No tienes permisos para recrear grupos");
+        }
+        String targetSchool = (schoolId == null || schoolId.isBlank()) ? user.schoolId() : schoolId;
+        if (targetSchool == null || targetSchool.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST, "Debes indicar schoolId");
+        }
+        if (!"SUPERADMIN".equals(role) && user.schoolId() != null && !user.schoolId().equalsIgnoreCase(targetSchool)) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "No puedes recrear grupos de otro colegio");
+        }
+        int updated = groupService.rebuildCourseGroups(targetSchool, year);
+        return ResponseEntity.ok(java.util.Map.of("updated", updated));
+    }
 }

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
+import { Modal } from '@/components/ui';
 import { apiClient } from '@/lib/api-client';
 import { useAuthStore, useYearStore } from '@/store';
 
@@ -31,6 +32,7 @@ type SchoolItem = {
 
 type StudentItem = {
   id: string;
+  run?: string;
   firstName: string;
   lastNameFather?: string;
   lastNameMother?: string;
@@ -40,9 +42,44 @@ type StudentItem = {
   course?: string;
 };
 
+const memberKeyVariants = (value?: string | number): string[] => {
+  if (value == null) return [];
+  const raw = String(value);
+  const trimmed = raw.trim();
+  const unquoted = trimmed.replace(/^['"`]+|['"`]+$/g, '').trim();
+  if (!trimmed) return [];
+  const lower = unquoted.toLowerCase();
+  const compact = lower
+    .replace(/[‐‑‒–—−]/g, '-')
+    .replace(/[.\s'"`]/g, '');
+  const variants = new Set<string>([trimmed, unquoted, lower, compact]);
+
+  if (!lower.includes('@')) {
+    const noHyphen = compact.replace(/-/g, '');
+    const alnum = noHyphen.replace(/[^0-9a-z]/g, '');
+    variants.add(noHyphen);
+    variants.add(alnum);
+    if (/^[0-9]+[0-9k]$/.test(alnum)) {
+      const rutCompact = alnum;
+      variants.add(rutCompact);
+      variants.add(rutCompact.toUpperCase());
+      variants.add(rutCompact.toLowerCase());
+      variants.add(`${rutCompact.slice(0, -1)}${rutCompact.slice(-1).toUpperCase()}`);
+      variants.add(`${rutCompact.slice(0, -1)}${rutCompact.slice(-1).toLowerCase()}`);
+      variants.add(`${rutCompact.slice(0, -1)}-${rutCompact.slice(-1)}`);
+      const rut = `${noHyphen.slice(0, -1)}-${noHyphen.slice(-1)}`;
+      variants.add(rut);
+      variants.add(rut.toLowerCase());
+      variants.add(rut.toUpperCase());
+    }
+  }
+  return Array.from(variants).filter(Boolean);
+};
+
 export default function GroupsPage() {
   const user = useAuthStore((state) => state.user);
   const hasPermission = useAuthStore((state) => state.hasPermission);
+  const role = (user?.role || '').toUpperCase();
   const { year } = useYearStore();
   const currentYear = new Date().getFullYear().toString();
   const effectiveYear = year || currentYear;
@@ -52,10 +89,12 @@ export default function GroupsPage() {
     hasPermission('groups.update') ||
     hasPermission('groups.delete');
   const isGlobalAdmin = (user?.schoolId || '').toLowerCase() === 'global';
+  const canRebuildGroups = role === 'SUPERADMIN' || role === 'ADMIN';
   const router = useRouter();
 
   const [users, setUsers] = useState<UserItem[]>([]);
   const [groups, setGroups] = useState<GroupItem[]>([]);
+  const [originalMemberIds, setOriginalMemberIds] = useState<string[]>([]);
   const [schools, setSchools] = useState<SchoolItem[]>([]);
   const [groupForm, setGroupForm] = useState({
     name: '',
@@ -65,10 +104,14 @@ export default function GroupsPage() {
   });
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [students, setStudents] = useState<StudentItem[]>([]);
+  const [lookupStudents, setLookupStudents] = useState<StudentItem[]>([]);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [loadingSchools, setLoadingSchools] = useState(false);
   const [savingGroup, setSavingGroup] = useState(false);
+  const [rebuildingGroups, setRebuildingGroups] = useState(false);
+  const [showRebuildConfirm, setShowRebuildConfirm] = useState(false);
+  const [rebuildResult, setRebuildResult] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [searchUser, setSearchUser] = useState('');
   const [searchGroup, setSearchGroup] = useState('');
@@ -78,11 +121,14 @@ export default function GroupsPage() {
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [showAllMembers, setShowAllMembers] = useState(false);
+  const [showAllCandidates, setShowAllCandidates] = useState(false);
 
   useEffect(() => {
     if (!canManageGroups) return;
     loadUsers();
     loadStudents();
+    loadLookupStudents();
     if (isGlobalAdmin) loadSchools();
     if (!isGlobalAdmin && user?.schoolId) {
       setGroupForm((prev) => ({ ...prev, schoolId: user.schoolId }));
@@ -92,6 +138,7 @@ export default function GroupsPage() {
   useEffect(() => {
     if (!canManageGroups) return;
     loadStudents();
+    loadLookupStudents();
   }, [groupForm.schoolId, effectiveYear, canManageGroups]);
 
   useEffect(() => {
@@ -155,16 +202,47 @@ export default function GroupsPage() {
         const data = res.data || {};
         const items = data.items || [];
         all.push(...items);
-        hasMore = data.hasMore === true && items.length > 0;
-        if (!hasMore || items.length < pageSize) break;
+        hasMore = data.hasMore === true;
+        if (!hasMore || items.length === 0) break;
         pageIndex += 1;
-        if (pageIndex > 10) break; // safety cap
+        if (pageIndex > 50) break; // safety cap
       }
       setStudents(all);
     } catch (err: any) {
       // silencioso
     } finally {
       setLoadingStudents(false);
+    }
+  };
+
+  const loadLookupStudents = async () => {
+    const targetSchoolId = isGlobalAdmin ? groupForm.schoolId : user?.schoolId;
+    if (!targetSchoolId) {
+      setLookupStudents([]);
+      return;
+    }
+    try {
+      const all: StudentItem[] = [];
+      const pageSize = 500;
+      let pageIndex = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const res = await apiClient.getStudents({
+          page: pageIndex,
+          pageSize,
+          schoolId: targetSchoolId,
+        });
+        const data = res.data || {};
+        const items = data.items || [];
+        all.push(...items);
+        hasMore = data.hasMore === true;
+        if (!hasMore || items.length === 0) break;
+        pageIndex += 1;
+        if (pageIndex > 50) break; // lookup only; evita loops infinitos
+      }
+      setLookupStudents(all);
+    } catch {
+      // lookup best-effort
     }
   };
 
@@ -206,6 +284,73 @@ export default function GroupsPage() {
         u.role?.toLowerCase().includes(term)
     );
   }, [searchUser, users, students, user?.schoolId, isGlobalAdmin, groupForm.schoolId]);
+
+  const memberLookup = useMemo(() => {
+    const map = new Map<string, { label: string; detail?: string }>();
+    const addLookup = (key: string | undefined, value: { label: string; detail?: string }) => {
+      memberKeyVariants(key).forEach((variant) => map.set(variant, value));
+    };
+
+    users.forEach((u) => {
+      const name = u.name || u.email || 'Usuario';
+      addLookup(u.id, { label: name, detail: u.email });
+      addLookup(u.email, { label: name, detail: u.email });
+    });
+    const allStudents = [...students, ...lookupStudents];
+    allStudents.forEach((s) => {
+      const fullName = `${s.firstName || ''} ${s.lastNameFather || ''} ${s.lastNameMother || ''}`.trim();
+      const label = fullName || s.email || 'Alumno';
+      addLookup(s.id, { label, detail: s.course });
+      addLookup(s.run, { label, detail: s.course });
+      addLookup(s.email, { label, detail: s.course });
+      (s.guardians || []).forEach((g) => {
+        if (!g?.email) return;
+        addLookup(g.email, {
+          label: fullName || 'Alumno',
+          detail: fullName ? s.course || g.email : g.email,
+        });
+      });
+    });
+    return map;
+  }, [users, students, lookupStudents]);
+
+  const selectedMemberLabels = useMemo(() => {
+    const unique = Array.from(new Set(groupForm.memberIds || []));
+    const resolveLookup = (key: string) => {
+      for (const variant of memberKeyVariants(key)) {
+        const found = memberLookup.get(variant);
+        if (found) return found;
+      }
+      return undefined;
+    };
+    return unique.map((id) => ({
+      id,
+      label: resolveLookup(id)?.label || id,
+      detail: resolveLookup(id)?.detail,
+    }));
+  }, [groupForm.memberIds, memberLookup]);
+
+  const candidateUsers = useMemo(() => {
+    const selected = new Set((groupForm.memberIds || []).flatMap((id) => memberKeyVariants(id)));
+    const isAlreadySelected = (raw?: string) =>
+      memberKeyVariants(raw).some((variant) => selected.has(variant));
+    return filteredUsers.filter((u) => !isAlreadySelected(u.id) && !isAlreadySelected(u.email || ''));
+  }, [filteredUsers, groupForm.memberIds]);
+
+  const memberChanges = useMemo(() => {
+    if (!editingId) return { added: 0, removed: 0 };
+    const original = new Set(originalMemberIds);
+    const current = new Set(groupForm.memberIds || []);
+    let added = 0;
+    let removed = 0;
+    current.forEach((id) => {
+      if (!original.has(id)) added += 1;
+    });
+    original.forEach((id) => {
+      if (!current.has(id)) removed += 1;
+    });
+    return { added, removed };
+  }, [editingId, originalMemberIds, groupForm.memberIds]);
 
   const loadSchools = async () => {
     setLoadingSchools(true);
@@ -321,6 +466,9 @@ export default function GroupsPage() {
 
   const startEdit = (g: GroupItem) => {
     setEditingId(g.id);
+    setShowAllMembers(false);
+    setShowAllCandidates(false);
+    setOriginalMemberIds(g.memberIds || []);
     setGroupForm({
       name: g.name,
       description: g.description || '',
@@ -331,6 +479,9 @@ export default function GroupsPage() {
 
   const cancelEdit = () => {
     setEditingId(null);
+    setShowAllMembers(false);
+    setShowAllCandidates(false);
+    setOriginalMemberIds([]);
     setGroupForm({
       name: '',
       description: '',
@@ -355,6 +506,44 @@ export default function GroupsPage() {
       setError(msg);
     } finally {
       setSavingGroup(false);
+    }
+  };
+
+  const handleRebuildCourses = () => {
+    if (!canRebuildGroups) return;
+    const targetSchool = isGlobalAdmin ? groupForm.schoolId : user?.schoolId;
+    if (!targetSchool) {
+      setError('Selecciona el colegio antes de recrear grupos.');
+      return;
+    }
+    setShowRebuildConfirm(true);
+  };
+
+  const confirmRebuildCourses = async () => {
+    const targetSchool = isGlobalAdmin ? groupForm.schoolId : user?.schoolId;
+    if (!targetSchool) {
+      setShowRebuildConfirm(false);
+      setError('Selecciona el colegio antes de recrear grupos.');
+      return;
+    }
+    setRebuildingGroups(true);
+    setShowRebuildConfirm(false);
+    setError('');
+    setRebuildResult(null);
+    try {
+      const res = await apiClient.rebuildCourseGroups({ schoolId: targetSchool, year: effectiveYear });
+      const updated = res?.data?.updated ?? 0;
+      setRebuildResult(updated);
+      await loadGroups();
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        'No se pudo recrear los grupos de curso';
+      setError(msg);
+    } finally {
+      setRebuildingGroups(false);
     }
   };
 
@@ -429,34 +618,77 @@ export default function GroupsPage() {
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">Miembros</label>
               <div className="space-y-2 border border-gray-200 rounded-lg p-3">
+                {groupForm.memberIds.length > 0 && (
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs text-gray-600">
+                        Miembros actuales: <strong>{groupForm.memberIds.length}</strong>
+                      </p>
+                      {selectedMemberLabels.length > 10 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllMembers((prev) => !prev)}
+                          className="text-xs text-primary hover:underline"
+                        >
+                          {showAllMembers ? 'Mostrar menos' : 'Mostrar todos'}
+                        </button>
+                      )}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(showAllMembers ? selectedMemberLabels : selectedMemberLabels.slice(0, 10)).map((m) => (
+                        <button
+                          type="button"
+                          key={m.id}
+                          title={m.detail ? `${m.label} · ${m.detail}` : m.label}
+                          className="group flex max-w-[260px] items-center gap-2 truncate rounded-full border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-700 hover:border-red-200 hover:bg-red-50"
+                          onClick={() =>
+                            setGroupForm((prev) => ({
+                              ...prev,
+                              memberIds: prev.memberIds.filter((id) => id !== m.id),
+                            }))
+                          }
+                        >
+                          <span className="truncate">
+                            {m.detail ? `${m.label} · ${m.detail}` : m.label}
+                          </span>
+                          <span className="text-xs text-red-400 group-hover:text-red-600">×</span>
+                        </button>
+                      ))}
+                      {selectedMemberLabels.length === 0 && (
+                        <span className="text-xs text-gray-500">Sin miembros seleccionados.</span>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <input
                     type="search"
                     value={searchUser}
                     onChange={(e) => setSearchUser(e.target.value)}
-                    placeholder="Buscar por nombre, email, curso o rol"
+                    placeholder="Buscar para agregar..."
                     className="w-full sm:w-2/3 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
                   />
                   <span className="text-xs text-gray-500">
-                    {filteredUsers.length} resultado(s)
+                    {candidateUsers.length} candidato(s)
                   </span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 max-h-64 overflow-y-auto pr-1">
-                  {filteredUsers.map((u) => (
-                    <label key={u.id} className="flex items-center gap-3 text-sm border border-gray-200 rounded-lg px-3 py-2 hover:border-primary cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={groupForm.memberIds.includes(u.id)}
-                        onChange={(e) => {
-                          const checked = e.target.checked;
-                          setGroupForm((prev) => {
-                            const next = new Set(prev.memberIds);
-                            if (checked) next.add(u.id);
-                            else next.delete(u.id);
-                            return { ...prev, memberIds: Array.from(next) };
-                          });
-                        }}
-                      />
+                  {(showAllCandidates ? candidateUsers : candidateUsers.slice(0, 60)).map((u) => {
+                    const memberKey = u.email || u.id;
+                    return (
+                    <button
+                      type="button"
+                      key={u.id}
+                      onClick={() =>
+                        setGroupForm((prev) => ({
+                          ...prev,
+                          memberIds: prev.memberIds.includes(memberKey)
+                            ? prev.memberIds
+                            : [...prev.memberIds, memberKey],
+                        }))
+                      }
+                      className="flex items-center gap-3 text-left text-sm border border-gray-200 rounded-lg px-3 py-2 hover:border-primary hover:bg-primary/5"
+                    >
                       <div className="flex-1">
                         <p className="text-gray-800 font-medium">{u.name || 'Sin nombre'}</p>
                         <p className="text-gray-500 text-xs">{u.email || 'Sin correo'}</p>
@@ -465,15 +697,25 @@ export default function GroupsPage() {
                       <span className="text-[11px] px-2 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-600">
                         {u.badge}
                       </span>
-                    </label>
-                  ))}
+                    </button>
+                  );
+                  })}
                   {!users.length && (
                     <p className="text-sm text-gray-500">No hay usuarios para seleccionar.</p>
                   )}
-                  {users.length > 0 && !filteredUsers.length && (
-                    <p className="text-sm text-gray-500">Sin coincidencias para la búsqueda.</p>
+                  {users.length > 0 && !candidateUsers.length && (
+                    <p className="text-sm text-gray-500">Sin candidatos para agregar.</p>
                   )}
                 </div>
+                {candidateUsers.length > 60 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllCandidates((prev) => !prev)}
+                    className="text-xs text-primary hover:underline self-start"
+                  >
+                    {showAllCandidates ? 'Mostrar menos candidatos' : 'Mostrar todos los candidatos'}
+                  </button>
+                )}
               </div>
             </div>
             <div className="md:col-span-2 flex justify-end">
@@ -484,6 +726,11 @@ export default function GroupsPage() {
               >
                 {savingGroup ? 'Guardando...' : editingId ? 'Actualizar grupo' : 'Crear grupo'}
               </button>
+              {editingId && (memberChanges.added > 0 || memberChanges.removed > 0) && (
+                <span className="ml-3 self-center text-xs text-gray-500">
+                  Cambios: +{memberChanges.added} / -{memberChanges.removed}
+                </span>
+              )}
               {editingId && (
                 <button
                   type="button"
@@ -502,6 +749,16 @@ export default function GroupsPage() {
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold text-gray-900">Grupos creados</h2>
             <div className="flex items-center gap-3">
+              {canRebuildGroups && (
+                <button
+                  type="button"
+                  onClick={handleRebuildCourses}
+                  disabled={rebuildingGroups}
+                  className="inline-flex items-center rounded-xl border border-amber-300 bg-gradient-to-r from-amber-400 to-orange-500 px-4 py-2 text-xs font-semibold tracking-wide text-white shadow-sm transition hover:from-amber-500 hover:to-orange-600 disabled:opacity-60"
+                >
+                  {rebuildingGroups ? 'Recreando...' : 'Recrear grupos de curso'}
+                </button>
+              )}
               <input
                 type="search"
                 value={searchGroup}
@@ -523,6 +780,11 @@ export default function GroupsPage() {
               </button>
             </div>
           </div>
+          {rebuildResult !== null && (
+            <div className="text-xs text-gray-600">
+              Grupos de curso recreados/actualizados: <strong>{rebuildResult}</strong>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {paginatedGroups.map((g) => (
               <div
@@ -580,6 +842,25 @@ export default function GroupsPage() {
           </div>
         </div>
       </div>
+      <Modal
+        isOpen={showRebuildConfirm}
+        title="Recrear grupos de curso"
+        onClose={() => setShowRebuildConfirm(false)}
+        onConfirm={confirmRebuildCourses}
+        confirmText={rebuildingGroups ? 'Recreando...' : 'Sí, recrear'}
+        cancelText="Cancelar"
+      >
+        <div className="space-y-2 text-sm text-gray-700">
+          <p>
+            Se recrearán los grupos para el colegio{' '}
+            <span className="font-semibold">{isGlobalAdmin ? groupForm.schoolId || '—' : user?.schoolId || '—'}</span>{' '}
+            del año <span className="font-semibold">{effectiveYear}</span>.
+          </p>
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+            Esta acción actualiza miembros por curso según la matrícula vigente.
+          </p>
+        </div>
+      </Modal>
     </ProtectedLayout>
   );
 }

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.Valid;
@@ -100,5 +101,23 @@ public class StudentController {
         }
         StudentDto saved = studentService.update(id, request, requesterSchool, "global".equalsIgnoreCase(requesterSchool));
         return ResponseEntity.ok(saved);
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(@PathVariable String id) {
+        CurrentUser user = CurrentUser.fromContext()
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED));
+        String role = user.role() != null ? user.role().toUpperCase() : "";
+        if (!"SUPERADMIN".equals(role) && !"ADMIN".equals(role)) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "No tienes permisos para eliminar estudiantes");
+        }
+        StudentDto student = studentService.getById(id)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(HttpStatus.NOT_FOUND, "Estudiante no encontrado"));
+        String targetSchool = student.schoolId() == null || student.schoolId().isBlank() ? "global" : student.schoolId();
+        if (!"SUPERADMIN".equals(role) && user.schoolId() != null && !user.schoolId().equalsIgnoreCase(targetSchool)) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "No puedes eliminar estudiantes de otro colegio");
+        }
+        studentService.delete(id, user.schoolId(), "SUPERADMIN".equals(role));
+        return ResponseEntity.noContent().build();
     }
 }

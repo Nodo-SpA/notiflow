@@ -97,13 +97,25 @@ public class MessageService {
         this.teacherPermissionService = teacherPermissionService;
     }
 
-    public MessageListResponse list(String schoolId, boolean isGlobal, String year, String senderEmailFilter, String recipientEmailFilter, String query, int page, int pageSize) {
+    public MessageListResponse list(String schoolId, boolean isGlobal, String year, String senderEmailFilter, String recipientEmailFilter, String query, int page, int pageSize, String studentIdFilter) {
         try {
             int safePage = Math.max(1, page);
             int safeSize = Math.min(Math.max(1, pageSize), 100);
             com.google.cloud.firestore.Query base = firestore.collectionGroup("messages");
-            if (!isGlobal || (schoolId != null && !schoolId.isBlank())) {
+            StudentDocument scopedStudent = null;
+            boolean useStudentFilter = studentIdFilter != null && !studentIdFilter.isBlank()
+                    && recipientEmailFilter != null && !recipientEmailFilter.isBlank();
+            if (useStudentFilter && studentService != null) {
+                scopedStudent = studentService.findById(studentIdFilter).orElse(null);
+                if (scopedStudent == null || !isLinkedToStudent(scopedStudent, recipientEmailFilter)) {
+                    return new MessageListResponse(List.of(), 0, safePage, safeSize, false);
+                }
+            }
+            if (useStudentFilter || !isGlobal || (schoolId != null && !schoolId.isBlank())) {
                 String targetSchool = (schoolId == null || schoolId.isBlank()) ? "global" : schoolId;
+                if (useStudentFilter && scopedStudent != null && scopedStudent.getSchoolId() != null && !scopedStudent.getSchoolId().isBlank()) {
+                    targetSchool = scopedStudent.getSchoolId();
+                }
                 base = base.whereEqualTo("schoolId", targetSchool);
             }
             if (year != null && !year.isBlank()) {
@@ -112,12 +124,25 @@ public class MessageService {
             if (senderEmailFilter != null && !senderEmailFilter.isBlank()) {
                 base = base.whereEqualTo("senderEmail", senderEmailFilter.toLowerCase());
             }
-            if (recipientEmailFilter != null && !recipientEmailFilter.isBlank()) {
+            if (!useStudentFilter && recipientEmailFilter != null && !recipientEmailFilter.isBlank()) {
                 base = base.whereArrayContains("recipients", recipientEmailFilter.toLowerCase());
             }
-            return fetch(base, query, safePage, safeSize);
+            MessageListResponse baseResponse = fetch(base, query, safePage, safeSize);
+            if (studentIdFilter == null || studentIdFilter.isBlank() || recipientEmailFilter == null || recipientEmailFilter.isBlank()) {
+                return baseResponse;
+            }
+            StudentAudienceContext ctx = resolveStudentAudience(studentIdFilter, recipientEmailFilter);
+            if (ctx.audienceKeys.isEmpty() && ctx.groupIds.isEmpty()) {
+                return new MessageListResponse(List.of(), 0, safePage, safeSize, false);
+            }
+            List<MessageDto> filtered = baseResponse.items().stream()
+                    .filter(m -> matchesStudentAudience(m, ctx))
+                    .collect(Collectors.toList());
+            return new MessageListResponse(filtered, filtered.size(), safePage, safeSize, false);
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error listando mensajes", e);
         }
     }
@@ -136,7 +161,9 @@ public class MessageService {
             msg.setId(snap.getId());
             return toDto(msg, CurrentUser.fromContext().orElse(null));
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error obteniendo mensaje", e);
         }
     }
@@ -199,6 +226,134 @@ public class MessageService {
         return content.contains(q) || senderName.contains(q) || senderEmail.contains(q) || recipients.contains(q) || reason.contains(q);
     }
 
+    private record StudentAudienceContext(List<String> audienceKeys, List<String> groupIds, String studentId) {}
+
+    private StudentAudienceContext resolveStudentAudience(String studentId, String guardianEmail) {
+        String normalizedStudentId = studentId == null ? "" : studentId.trim();
+        if (studentService == null || normalizedStudentId.isBlank()) {
+            return new StudentAudienceContext(List.of(), List.of(), normalizedStudentId);
+        }
+        StudentDocument student = studentService.findById(normalizedStudentId).orElse(null);
+        if (student == null) {
+            return new StudentAudienceContext(List.of(), List.of(), normalizedStudentId);
+        }
+        String normalizedGuardian = guardianEmail == null ? "" : guardianEmail.trim().toLowerCase();
+        if (!isLinkedToStudent(student, normalizedGuardian)) {
+            return new StudentAudienceContext(List.of(), List.of(), normalizedStudentId);
+        }
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        if (student.getId() != null && !student.getId().isBlank()) {
+            keys.add(student.getId());
+        }
+        if (student.getEmail() != null && !student.getEmail().isBlank()) {
+            keys.add(student.getEmail().trim().toLowerCase());
+        }
+        if (!normalizedGuardian.isBlank()) {
+            keys.add(normalizedGuardian);
+        }
+        List<String> groups = resolveGroupIdsForKeys(keys, student.getSchoolId());
+        return new StudentAudienceContext(new ArrayList<>(keys), groups, normalizedStudentId);
+    }
+
+    private boolean isLinkedToStudent(StudentDocument student, String email) {
+        if (student == null || email == null || email.isBlank()) return false;
+        String normalized = email.trim().toLowerCase();
+        if (student.getEmail() != null && student.getEmail().equalsIgnoreCase(normalized)) {
+            return true;
+        }
+        if (student.getGuardianEmails() != null) {
+            return student.getGuardianEmails().stream().anyMatch(g -> g != null && g.equalsIgnoreCase(normalized));
+        }
+        return false;
+    }
+
+    private List<String> resolveGroupIdsForKeys(java.util.Set<String> keys, String schoolId) {
+        if (keys == null || keys.isEmpty()) return List.of();
+        java.util.Set<String> groups = new java.util.HashSet<>();
+        String targetSchool = (schoolId == null || schoolId.isBlank()) ? "global" : schoolId;
+        for (String key : keys) {
+            if (key == null || key.isBlank()) continue;
+            groups.addAll(groupService.findGroupsForMember(key, targetSchool));
+        }
+        return new ArrayList<>(groups);
+    }
+
+    private boolean matchesStudentAudience(MessageDto msg, StudentAudienceContext ctx) {
+        if (msg == null) return false;
+        List<String> msgStudentIds = msg.studentIds() == null ? List.of() : msg.studentIds();
+        String targetStudentId = ctx.studentId;
+        if (targetStudentId != null && !targetStudentId.isBlank() && !msgStudentIds.isEmpty()) {
+            for (String sid : msgStudentIds) {
+                if (sid != null && sid.equals(targetStudentId)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        List<String> msgGroups = msg.groupIds() == null ? List.of() : msg.groupIds();
+        if (!ctx.groupIds.isEmpty() && !msgGroups.isEmpty()) {
+            for (String gid : msgGroups) {
+                if (ctx.groupIds.contains(gid)) return true;
+            }
+        }
+        List<String> recipients = msg.recipients() == null ? List.of() : msg.recipients();
+        if (!ctx.audienceKeys.isEmpty() && !recipients.isEmpty()) {
+            for (String key : ctx.audienceKeys) {
+                if (key == null || key.isBlank()) continue;
+                for (String r : recipients) {
+                    if (r == null || r.isBlank()) continue;
+                    if (matchesAudienceKey(r, key)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean matchesAudienceKey(String raw, String key) {
+        if (raw == null || key == null) return false;
+        String a = raw.trim();
+        String k = key.trim();
+        if (a.isEmpty() || k.isEmpty()) return false;
+        boolean emailLike = a.contains("@") || k.contains("@");
+        return emailLike ? a.equalsIgnoreCase(k) : a.equals(k);
+    }
+
+    private List<String> resolveGroupMemberRecipients(String member, java.util.Set<String> studentIdsCollector) {
+        if (member == null || member.isBlank()) return List.of();
+        String normalized = member.trim();
+        if (normalized.contains("@")) {
+            return List.of(normalized.toLowerCase());
+        }
+
+        StudentDocument student = studentService.findById(normalized).orElse(null);
+        if (student == null) {
+            return List.of();
+        }
+        if (student.getId() != null && !student.getId().isBlank()) {
+            studentIdsCollector.add(student.getId().trim());
+        }
+
+        java.util.LinkedHashSet<String> emails = new java.util.LinkedHashSet<>();
+        if (student.getEmail() != null && !student.getEmail().isBlank()) {
+            emails.add(student.getEmail().trim().toLowerCase());
+        }
+        if (student.getGuardianEmails() != null) {
+            student.getGuardianEmails().stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(s -> !s.isBlank())
+                    .map(String::toLowerCase)
+                    .forEach(emails::add);
+        }
+        if (student.getGuardians() != null) {
+            for (GuardianContact g : student.getGuardians()) {
+                if (g == null || g.getEmail() == null || g.getEmail().isBlank()) continue;
+                emails.add(g.getEmail().trim().toLowerCase());
+            }
+        }
+        return new ArrayList<>(emails);
+    }
+
     private long count(com.google.cloud.firestore.Query q) throws ExecutionException, InterruptedException {
         AggregateQuery countQuery = q.count();
         AggregateQuerySnapshot snapshot = countQuery.get().get();
@@ -230,7 +385,9 @@ public class MessageService {
             }
             ref.delete().get();
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error eliminando mensaje", e);
         }
     }
@@ -249,6 +406,14 @@ public class MessageService {
                     ? request.channels()
                     : List.of("email");
             List<String> groupIds = request.groupIds() == null ? List.of() : request.groupIds().stream().filter(g -> g != null && !g.isBlank()).map(String::trim).toList();
+            List<String> studentIds = request.studentIds() == null
+                    ? List.of()
+                    : request.studentIds().stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(s -> !s.isBlank())
+                    .distinct()
+                    .toList();
             senderName = resolveSenderName(senderName, senderId);
             String allStudentsGroupId = groupService.systemId(GroupService.SYSTEM_ALL_STUDENTS, resolvedYear);
             String allCommunityGroupId = groupService.systemId(GroupService.SYSTEM_ALL_COMMUNITY, resolvedYear);
@@ -265,8 +430,8 @@ public class MessageService {
                         throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "No puedes enviar a grupos fuera de tus permisos");
                     }
                 } else {
-                    // Envío directo (sin grupos): solo a usuarios de plataforma (no estudiantes)
-                    validateTeacherDirectRecipients(request.recipients());
+                    // Envío directo (sin grupos): usuarios de plataforma o alumnos dentro de grupos permitidos
+                    validateTeacherDirectRecipients(request.recipients(), request.studentIds(), allowed, schoolId);
                 }
             }
 
@@ -293,6 +458,7 @@ public class MessageService {
             boolean broadcast = false;
             if (groupIds != null && !groupIds.isEmpty()) {
                 List<String> expanded = new ArrayList<>(normalizedRecipients);
+                java.util.Set<String> expandedStudentIds = new java.util.HashSet<>(studentIds);
                 for (String gid : groupIds) {
                     if (gid == null || gid.isBlank()) continue;
                     try {
@@ -300,7 +466,9 @@ public class MessageService {
                         if (gOpt.isPresent()) {
                             GroupDocument g = gOpt.get();
                             if (g.getMemberIds() != null) {
-                                expanded.addAll(g.getMemberIds());
+                                for (String member : g.getMemberIds()) {
+                                    expanded.addAll(resolveGroupMemberRecipients(member, expandedStudentIds));
+                                }
                             }
                             if (Boolean.TRUE.equals(g.getSystem()) &&
                                     (GroupService.SYSTEM_ALL_STUDENTS.equalsIgnoreCase(g.getSystemType())
@@ -319,6 +487,7 @@ public class MessageService {
                         .map(String::toLowerCase)
                         .distinct()
                         .toList();
+                studentIds = expandedStudentIds.stream().toList();
             }
             if (normalizedRecipients.isEmpty()) {
                 throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "No hay destinatarios válidos");
@@ -329,6 +498,7 @@ public class MessageService {
             msg.setReason(request.reason());
             msg.setYear(resolvedYear);
             msg.setGroupIds(groupIds);
+            msg.setStudentIds(studentIds);
             if (!broadcast && (groupIds.contains(allStudentsGroupId) || groupIds.contains(allCommunityGroupId))) {
                 broadcast = true;
             }
@@ -407,7 +577,9 @@ public class MessageService {
             deliverNow(msg, attachments, channels, schoolLogo, schoolName, schoolId);
             return toDto(msg, CurrentUser.fromContext().orElse(null));
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error creando mensaje", e);
         }
     }
@@ -443,7 +615,9 @@ public class MessageService {
                 return u.getName();
             }
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
         }
         return null;
     }
@@ -494,7 +668,9 @@ public class MessageService {
             }
             return processed;
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error procesando mensajes programados", e);
         }
     }
@@ -624,7 +800,9 @@ public class MessageService {
         try {
             tenantMessages(schoolId).document(msg.getId()).set(msg).get();
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("Error actualizando mensaje enviado", e);
         }
     }
@@ -796,6 +974,7 @@ public class MessageService {
                 msg.getSchoolId(),
                 msg.getYear(),
                 msg.getGroupIds(),
+                msg.getStudentIds(),
                 msg.getStatus(),
                 msg.getScheduledAt(),
                 msg.getCreatedAt(),
@@ -819,7 +998,7 @@ public class MessageService {
                     .setContentType(att.mimeType() != null ? att.mimeType() : "application/octet-stream")
                     .build();
             storage.create(blobInfo, data);
-            java.net.URL signed = storage.signUrl(blobInfo, 30, TimeUnit.DAYS);
+            java.net.URL signed = storage.signUrl(blobInfo, 60, TimeUnit.DAYS);
             return new AttachmentMetadata(
                     att.fileName(),
                     att.mimeType(),
@@ -832,7 +1011,12 @@ public class MessageService {
         }).filter(Objects::nonNull).toList();
     }
 
-    private void validateTeacherDirectRecipients(List<String> recipients) {
+    private void validateTeacherDirectRecipients(
+            List<String> recipients,
+            List<String> selectedStudentIds,
+            List<String> allowedGroupIds,
+            String schoolId
+    ) {
         if (recipients == null || recipients.isEmpty()) {
             throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "No hay destinatarios");
         }
@@ -847,16 +1031,167 @@ public class MessageService {
             throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "No hay destinatarios válidos");
         }
         Map<String, UserRole> roles = fetchUserRoles(normalized);
+        boolean hasAllowedGroups = allowedGroupIds != null && !allowedGroupIds.isEmpty();
+        java.util.Set<String> allowedEmails = new java.util.HashSet<>();
+        java.util.Set<String> allowedStudentIds = new java.util.HashSet<>();
+        if (hasAllowedGroups) {
+            for (String gid : allowedGroupIds) {
+                if (gid == null || gid.isBlank()) continue;
+                try {
+                    var gOpt = groupService.findById(gid, schoolId);
+                    if (gOpt.isEmpty()) continue;
+                    List<String> members = gOpt.get().getMemberIds();
+                    if (members == null || members.isEmpty()) continue;
+                    for (String m : members) {
+                        if (m == null || m.isBlank()) continue;
+                        String trimmed = m.trim();
+                        if (trimmed.contains("@")) {
+                            allowedEmails.add(trimmed.toLowerCase());
+                        } else {
+                            allowedStudentIds.add(trimmed);
+                        }
+                    }
+                } catch (Exception ignore) {
+                    // si no se puede leer el grupo, seguimos con los restantes
+                }
+            }
+        }
+        List<String> normalizedStudentIds = selectedStudentIds == null
+                ? List.of()
+                : selectedStudentIds.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .distinct()
+                .toList();
+        if (!normalizedStudentIds.isEmpty()) {
+            if (!allowedStudentIds.isEmpty()) {
+                for (String studentId : normalizedStudentIds) {
+                    if (!allowedStudentIds.contains(studentId)) {
+                        throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "No puedes enviar a alumnos fuera de tus grupos permitidos");
+                    }
+                }
+            } else if (hasAllowedGroups) {
+                // Compatibilidad con grupos antiguos que guardan solo correos.
+                for (String studentId : normalizedStudentIds) {
+                    StudentDocument student = studentService.findById(studentId).orElse(null);
+                    if (student == null || !isStudentMatchedByEmails(student, allowedEmails)) {
+                        throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "No puedes enviar a alumnos fuera de tus grupos permitidos");
+                    }
+                }
+            }
+        }
+        java.util.Set<String> selectedStudentEmails = normalizedStudentIds.isEmpty()
+                ? java.util.Collections.emptySet()
+                : expandStudentAudienceEmails(normalizedStudentIds);
+        java.util.Map<String, Boolean> studentAllowedCache = new java.util.HashMap<>();
         for (String email : normalized) {
             UserRole role = roles.get(email);
             if (role == null) {
-                throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "Solo puedes enviar directo a usuarios de la plataforma (admin/coordinador/profesor)");
+                if (!hasAllowedGroups) {
+                    throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "Solo puedes enviar directo a usuarios de la plataforma o alumnos de tus grupos permitidos");
+                }
+                if (!selectedStudentEmails.isEmpty()) {
+                    if (selectedStudentEmails.contains(email)) {
+                        continue;
+                    }
+                    throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "Solo puedes enviar directo a usuarios de la plataforma o alumnos de tus grupos permitidos");
+                }
+                if (allowedEmails.contains(email)) {
+                    continue;
+                }
+                boolean allowedStudent = studentAllowedCache.computeIfAbsent(email, key -> isStudentAllowedByGroups(key, allowedEmails, allowedStudentIds));
+                if (allowedStudent) {
+                    continue;
+                }
+                throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "Solo puedes enviar directo a usuarios de la plataforma o alumnos de tus grupos permitidos");
             }
             String r = role.name().toUpperCase();
             if (!(r.equals("ADMIN") || r.equals("COORDINATOR") || r.equals("GESTION_ESCOLAR") || r.equals("SUPERADMIN") || r.equals("TEACHER"))) {
-                throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "Solo puedes enviar directo a usuarios de la plataforma (admin/coordinador/profesor)");
+                throw new ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "Solo puedes enviar directo a usuarios de la plataforma o alumnos de tus grupos permitidos");
             }
         }
+    }
+
+    private boolean isStudentAllowedByGroups(String email, java.util.Set<String> allowedEmails, java.util.Set<String> allowedStudentIds) {
+        if (email == null || email.isBlank()) return false;
+        if ((allowedEmails == null || allowedEmails.isEmpty()) && (allowedStudentIds == null || allowedStudentIds.isEmpty())) return false;
+        try {
+            List<StudentDocument> students = studentService.findAllByEmail(email);
+            for (StudentDocument s : students) {
+                if (s == null) continue;
+                if (allowedStudentIds != null && !allowedStudentIds.isEmpty()) {
+                    if (s.getId() != null && allowedStudentIds.contains(s.getId().trim())) {
+                        return true;
+                    }
+                    continue;
+                }
+                List<String> guardianEmails = s.getGuardianEmails();
+                if (guardianEmails != null) {
+                    for (String ge : guardianEmails) {
+                        if (ge != null && allowedEmails.contains(ge.trim().toLowerCase())) return true;
+                    }
+                }
+                if (s.getGuardians() != null) {
+                    for (GuardianContact g : s.getGuardians()) {
+                        if (g == null || g.getEmail() == null) continue;
+                        String ge = g.getEmail().trim().toLowerCase();
+                        if (!ge.isBlank() && allowedEmails.contains(ge)) return true;
+                    }
+                }
+            }
+        } catch (Exception ignore) {
+            // si falla la consulta, no autorizamos
+        }
+        return false;
+    }
+
+    private boolean isStudentMatchedByEmails(StudentDocument student, java.util.Set<String> allowedEmails) {
+        if (student == null || allowedEmails == null || allowedEmails.isEmpty()) return false;
+        if (student.getEmail() != null && allowedEmails.contains(student.getEmail().trim().toLowerCase())) {
+            return true;
+        }
+        if (student.getGuardianEmails() != null) {
+            for (String ge : student.getGuardianEmails()) {
+                if (ge != null && allowedEmails.contains(ge.trim().toLowerCase())) return true;
+            }
+        }
+        if (student.getGuardians() != null) {
+            for (GuardianContact g : student.getGuardians()) {
+                if (g == null || g.getEmail() == null) continue;
+                String ge = g.getEmail().trim().toLowerCase();
+                if (!ge.isBlank() && allowedEmails.contains(ge)) return true;
+            }
+        }
+        return false;
+    }
+
+    private java.util.Set<String> expandStudentAudienceEmails(List<String> studentIds) {
+        java.util.Set<String> allowed = new java.util.HashSet<>();
+        if (studentIds == null || studentIds.isEmpty()) return allowed;
+        for (String id : studentIds) {
+            if (id == null || id.isBlank()) continue;
+            StudentDocument student = studentService.findById(id).orElse(null);
+            if (student == null) continue;
+            if (student.getEmail() != null && !student.getEmail().isBlank()) {
+                allowed.add(student.getEmail().trim().toLowerCase());
+            }
+            if (student.getGuardianEmails() != null) {
+                student.getGuardianEmails().stream()
+                        .filter(Objects::nonNull)
+                        .map(String::trim)
+                        .filter(s -> !s.isBlank())
+                        .map(String::toLowerCase)
+                        .forEach(allowed::add);
+            }
+            if (student.getGuardians() != null) {
+                for (GuardianContact g : student.getGuardians()) {
+                    if (g == null || g.getEmail() == null || g.getEmail().isBlank()) continue;
+                    allowed.add(g.getEmail().trim().toLowerCase());
+                }
+            }
+        }
+        return allowed;
     }
 
     private Map<String, UserRole> fetchUserRoles(List<String> emails) {
@@ -879,7 +1214,9 @@ public class MessageService {
             }
             return result;
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new ResponseStatusException(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR, "Error validando destinatarios", e);
         }
     }
@@ -1055,7 +1392,9 @@ public class MessageService {
 
             ref.set(msg).get();
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("No se pudo marcar como leído", e);
         }
     }
@@ -1092,7 +1431,9 @@ public class MessageService {
             }
             ref.set(msg).get();
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("No se pudo marcar email como leído", e);
         }
     }
@@ -1115,8 +1456,7 @@ public class MessageService {
                 ? "<img src=\"" + logoUrl + "\" alt=\"Logo colegio\" style=\"max-height:64px; width:auto; display:block;\" />"
                 : "<img src=\"" + notiflowBadge + "\" alt=\"Notiflow\" style=\"height:48px; width:auto; display:block;\" />";
         String headerText = (reason != null && !reason.isBlank()) ? reason : "Mensaje";
-        String senderLine = (senderName != null ? senderName : "Usuario") +
-                (senderEmail != null && !senderEmail.isBlank() ? " (" + senderEmail + ")" : "");
+        String senderLine = (senderName != null && !senderName.isBlank()) ? senderName : "Usuario";
         String schoolLine = (schoolName != null && !schoolName.isBlank()) ? schoolName : "Notiflow";
         String recipientEmail = (recipientName != null && !recipientName.isBlank()) ? recipientName : "";
         String recipientLabel = formatRecipient(recipientEmail);

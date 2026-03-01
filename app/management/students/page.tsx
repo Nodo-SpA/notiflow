@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { FiMail, FiPhone, FiMapPin, FiHome } from 'react-icons/fi';
+import { FiAlertTriangle, FiMail, FiPhone, FiMapPin, FiHome } from 'react-icons/fi';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { apiClient } from '@/lib/api-client';
 import { useAuthStore, useYearStore } from '@/store';
@@ -28,6 +28,7 @@ type StudentItem = {
 export default function StudentsPage() {
   const user = useAuthStore((state) => state.user);
   const hasPermission = useAuthStore((state) => state.hasPermission);
+  const role = (user?.role || '').toUpperCase();
   const { year } = useYearStore();
   const canManageStudents =
     hasPermission('students.create') ||
@@ -35,6 +36,7 @@ export default function StudentsPage() {
     hasPermission('students.delete');
   const canCreateStudents = hasPermission('students.create');
   const canUpdateStudents = hasPermission('students.update');
+  const canDeleteStudents = role === 'SUPERADMIN' || role === 'ADMIN';
   const isGlobalAdmin = (user?.schoolId || '').toLowerCase() === 'global';
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -45,9 +47,13 @@ export default function StudentsPage() {
   const [formError, setFormError] = useState('');
   const [success, setSuccess] = useState('');
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<StudentItem | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = 50;
   const [yearFilter, setYearFilter] = useState<string>(year || '');
+  const [courseOptions, setCourseOptions] = useState<string[]>([]);
+  const [loadingCourses, setLoadingCourses] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [studentForm, setStudentForm] = useState({
@@ -121,6 +127,50 @@ export default function StudentsPage() {
     loadStudents();
   }, [loadStudents]);
 
+  const loadCourseOptions = useCallback(async () => {
+    if (!canManageStudents) return;
+    const targetSchool = isGlobalAdmin ? studentForm.schoolId : user?.schoolId;
+    if (!targetSchool) {
+      setCourseOptions([]);
+      return;
+    }
+    setLoadingCourses(true);
+    try {
+      const all: string[] = [];
+      const pageSize = 500;
+      let pageIndex = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const res = await apiClient.getStudents({
+          page: pageIndex,
+          pageSize,
+          schoolId: targetSchool,
+          year: yearFilter || undefined,
+        });
+        const data = res.data || {};
+        const items = data.items || [];
+        items.forEach((s: StudentItem) => {
+          const course = (s.course || '').trim();
+          if (course) all.push(course);
+        });
+        hasMore = data.hasMore === true;
+        if (!hasMore || items.length === 0) break;
+        pageIndex += 1;
+        if (pageIndex > 50) break;
+      }
+      const unique = Array.from(new Set(all)).sort((a, b) => a.localeCompare(b));
+      setCourseOptions(unique);
+    } catch (_) {
+      setCourseOptions([]);
+    } finally {
+      setLoadingCourses(false);
+    }
+  }, [canManageStudents, isGlobalAdmin, studentForm.schoolId, user?.schoolId, yearFilter]);
+
+  useEffect(() => {
+    loadCourseOptions();
+  }, [loadCourseOptions]);
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const paginated = students;
 
@@ -148,6 +198,34 @@ export default function StudentsPage() {
     setSaving(true);
     setFormError('');
     setSuccess('');
+    const hasGuardian = (studentForm.guardians || []).some(
+      (g) => (g.name || '').trim() || (g.email || '').trim() || (g.phone || '').trim()
+    );
+    if (!studentForm.firstName.trim()) {
+      setFormError('Nombres es obligatorio');
+      setSaving(false);
+      return;
+    }
+    if (!studentForm.lastNameFather.trim()) {
+      setFormError('Apellido paterno es obligatorio');
+      setSaving(false);
+      return;
+    }
+    if (!studentForm.lastNameMother.trim()) {
+      setFormError('Apellido materno es obligatorio');
+      setSaving(false);
+      return;
+    }
+    if (!studentForm.course.trim()) {
+      setFormError('Curso es obligatorio');
+      setSaving(false);
+      return;
+    }
+    if (!hasGuardian) {
+      setFormError('Debes agregar al menos un apoderado');
+      setSaving(false);
+      return;
+    }
     try {
       const { year: _ignoredYear, ...rest } = studentForm as any;
       const payload = {
@@ -174,6 +252,28 @@ export default function StudentsPage() {
       setFormError(msg);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async (student: StudentItem) => {
+    if (!canDeleteStudents || !student?.id) return;
+    setDeletingId(student.id);
+    setFormError('');
+    setSuccess('');
+    try {
+      await apiClient.deleteStudent(student.id);
+      setSuccess('Estudiante eliminado correctamente');
+      await loadStudents(page);
+      setPendingDelete(null);
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        'No se pudo eliminar el estudiante';
+      setFormError(msg);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -278,7 +378,7 @@ export default function StudentsPage() {
                   <th className="px-4 py-3">RUN</th>
                   <th className="px-4 py-3">Apoderados</th>
                   <th className="px-4 py-3">Contacto</th>
-                  {canUpdateStudents && <th className="px-4 py-3">Acciones</th>}
+                  {(canUpdateStudents || canDeleteStudents) && <th className="px-4 py-3">Acciones</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 text-sm">
@@ -334,22 +434,36 @@ export default function StudentsPage() {
                         ) : null}
                       </div>
                     </td>
-                    {canUpdateStudents && (
+                    {(canUpdateStudents || canDeleteStudents) && (
                       <td className="px-4 py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => startEdit(s)}
-                          className="text-sm text-primary hover:text-green-800"
-                        >
-                          Editar
-                        </button>
+                        <div className="flex justify-end gap-3">
+                          {canUpdateStudents && (
+                            <button
+                              type="button"
+                              onClick={() => startEdit(s)}
+                              className="text-sm text-primary hover:text-green-800"
+                            >
+                              Editar
+                            </button>
+                          )}
+                          {canDeleteStudents && (
+                            <button
+                              type="button"
+                              onClick={() => setPendingDelete(s)}
+                              className="text-sm text-red-600 hover:underline"
+                              disabled={deletingId === s.id}
+                            >
+                              {deletingId === s.id ? 'Eliminando...' : 'Eliminar'}
+                            </button>
+                          )}
+                        </div>
                       </td>
                     )}
                   </tr>
                 ))}
                 {!paginated.length && (
                   <tr>
-                    <td className="px-4 py-3 text-gray-500" colSpan={canUpdateStudents ? 7 : 6}>
+                    <td className="px-4 py-3 text-gray-500" colSpan={canUpdateStudents || canDeleteStudents ? 7 : 6}>
                       No se encontraron estudiantes con ese criterio.
                     </td>
                   </tr>
@@ -403,7 +517,7 @@ export default function StudentsPage() {
             </div>
           )}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nombres</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nombres *</label>
             <input
               type="text"
               value={studentForm.firstName}
@@ -413,32 +527,46 @@ export default function StudentsPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Apellido paterno</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Apellido paterno *</label>
             <input
               type="text"
               value={studentForm.lastNameFather}
               onChange={(e) => setStudentForm((prev) => ({ ...prev, lastNameFather: e.target.value }))}
               className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+              required
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Apellido materno</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Apellido materno *</label>
             <input
               type="text"
               value={studentForm.lastNameMother}
               onChange={(e) => setStudentForm((prev) => ({ ...prev, lastNameMother: e.target.value }))}
               className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
+              required
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Curso</label>
-            <input
-              type="text"
+            <label className="block text-sm font-medium text-gray-700 mb-1">Curso *</label>
+            <select
               value={studentForm.course}
               onChange={(e) => setStudentForm((prev) => ({ ...prev, course: e.target.value }))}
-              placeholder="Ej: 4B"
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-            />
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200 bg-white"
+              required
+            >
+              <option value="">Selecciona curso</option>
+              {courseOptions.map((course) => (
+                <option key={course} value={course}>
+                  {course}
+                </option>
+              ))}
+              {studentForm.course && !courseOptions.includes(studentForm.course) && (
+                <option value={studentForm.course}>{studentForm.course}</option>
+              )}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              {loadingCourses ? 'Cargando cursos...' : courseOptions.length ? 'Cursos del colegio' : 'Sin cursos cargados'}
+            </p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">RUN</label>
@@ -484,8 +612,8 @@ export default function StudentsPage() {
           <div className="md:col-span-2 border border-gray-200 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
               <div>
-                <label className="block text-sm font-medium text-gray-700">Apoderados</label>
-                <p className="text-xs text-gray-500">Puedes agregar varios apoderados (nombre y correo)</p>
+                <label className="block text-sm font-medium text-gray-700">Apoderados *</label>
+                <p className="text-xs text-gray-500">Agrega al menos un apoderado (nombre y/o correo)</p>
               </div>
               <button
                 type="button"
@@ -533,7 +661,6 @@ export default function StudentsPage() {
                       }}
                       placeholder="Correo"
                       className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
-                      required
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -604,6 +731,53 @@ export default function StudentsPage() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        isOpen={!!pendingDelete}
+        onClose={() => {
+          if (!deletingId) setPendingDelete(null);
+        }}
+        title="Eliminar estudiante"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-red-100 text-red-600">
+              <FiAlertTriangle />
+            </span>
+            <div>
+              <p className="text-gray-900 font-semibold">¿Eliminar estudiante?</p>
+              <p className="text-sm text-gray-600">Esta acción no se puede deshacer.</p>
+            </div>
+          </div>
+          <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <span className="font-semibold">
+              {pendingDelete
+                ? `${pendingDelete.firstName || ''} ${pendingDelete.lastNameFather || ''} ${pendingDelete.lastNameMother || ''}`.trim() ||
+                  'Estudiante sin nombre'
+                : 'Estudiante'}
+            </span>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm"
+              onClick={() => setPendingDelete(null)}
+              disabled={!!deletingId}
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="px-3 py-1.5 rounded-lg text-sm text-white bg-red-600 hover:bg-red-700 disabled:opacity-60"
+              onClick={() => pendingDelete && handleDelete(pendingDelete)}
+              disabled={!!deletingId}
+            >
+              {deletingId ? 'Eliminando...' : 'Eliminar'}
+            </button>
+          </div>
+        </div>
       </Modal>
     </ProtectedLayout>
   );

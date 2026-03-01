@@ -24,6 +24,7 @@ public record MessageDto(
         String schoolId,
         String year,
         List<String> groupIds,
+        List<String> studentIds,
         MessageStatus status,
         Instant scheduledAt,
         Instant createdAt,

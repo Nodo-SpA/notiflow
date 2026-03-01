@@ -13,6 +13,7 @@ public record MessageRequest(
         String reason,
         List<AttachmentRequest> attachments,
         List<String> groupIds,
+        List<String> studentIds,
         String scheduleAt
 ) {
 }

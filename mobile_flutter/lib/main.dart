@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:app_settings/app_settings.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest.dart' as tz;
@@ -21,6 +22,92 @@ const Color kSurface = Colors.white; // superficies blancas y limpias
 const Duration kTimeout = Duration(seconds: 15);
 
 final FlutterLocalNotificationsPlugin localNotifications = FlutterLocalNotificationsPlugin();
+final Set<String> _registeringTokens = <String>{};
+const List<Duration> _registerRetryDelays = [
+  Duration(seconds: 1),
+  Duration(seconds: 3),
+  Duration(seconds: 7),
+];
+
+Future<String?> _refreshAuthTokenFromPrefs() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final refreshToken = prefs.getString('refreshToken');
+    if (refreshToken == null || refreshToken.isEmpty) return null;
+    final res = await http
+        .post(
+          Uri.parse('$apiBase/auth/refresh'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'refreshToken': refreshToken}),
+        )
+        .timeout(kTimeout);
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body);
+      final newToken = data['token'] as String?;
+      final newRefresh = data['refreshToken'] as String?;
+      if (newToken != null && newToken.isNotEmpty) {
+        await prefs.setString('authToken', newToken);
+      }
+      if (newRefresh != null && newRefresh.isNotEmpty) {
+        await prefs.setString('refreshToken', newRefresh);
+      }
+      return newToken;
+    }
+  } catch (_) {
+    // silencioso
+  }
+  return null;
+}
+
+Future<http.Response> _authedRequest(
+  String method,
+  Uri uri, {
+  Map<String, String>? headers,
+  Object? body,
+  String? tokenOverride,
+}) async {
+  final prefs = await SharedPreferences.getInstance();
+  String? token = prefs.getString('authToken') ?? tokenOverride;
+  Map<String, String> resolved = {
+    if (headers != null) ...headers,
+  };
+  if (token != null && token.isNotEmpty) {
+    resolved['Authorization'] = 'Bearer $token';
+  }
+
+  Future<http.Response> send() {
+    switch (method.toUpperCase()) {
+      case 'POST':
+        return http.post(uri, headers: resolved, body: body).timeout(kTimeout);
+      case 'GET':
+      default:
+        return http.get(uri, headers: resolved).timeout(kTimeout);
+    }
+  }
+
+  http.Response res = await send();
+  if (res.statusCode == 401) {
+    final newToken = await _refreshAuthTokenFromPrefs();
+    if (newToken != null && newToken.isNotEmpty) {
+      resolved['Authorization'] = 'Bearer $newToken';
+      res = await send();
+    }
+  }
+  return res;
+}
+
+Future<http.Response> _authedGet(String url, {String? token}) {
+  return _authedRequest('GET', Uri.parse(url), tokenOverride: token);
+}
+
+Future<http.Response> _authedPost(
+  String url, {
+  String? token,
+  Map<String, String>? headers,
+  Object? body,
+}) {
+  return _authedRequest('POST', Uri.parse(url), tokenOverride: token, headers: headers, body: body);
+}
 const AndroidNotificationDetails kEventChannel = AndroidNotificationDetails(
   'notiflow_events',
   'Recordatorios de eventos',
@@ -57,6 +144,81 @@ Future<void> _initLocalNotifications() async {
       ?.requestPermissions(alert: true, badge: true, sound: true);
 }
 
+Future<void> _registerDeviceTokenWithAuth({
+  required String authToken,
+  required String email,
+  String? fcmToken,
+}) async {
+  try {
+    final token = fcmToken ?? await FirebaseMessaging.instance.getToken();
+    if (token == null || token.isEmpty) return;
+    if (_registeringTokens.contains(token)) return;
+    _registeringTokens.add(token);
+    await _attemptRegisterDeviceToken(
+      authToken: authToken,
+      email: email,
+      fcmToken: token,
+      attempt: 0,
+    );
+  } catch (_) {
+    // silencioso; reintentamos en próximos arranques
+  }
+}
+
+Future<void> _attemptRegisterDeviceToken({
+  required String authToken,
+  required String email,
+  required String fcmToken,
+  required int attempt,
+}) async {
+  try {
+    final res = await _authedPost(
+      '$apiBase/devices/register',
+      token: authToken,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({'token': fcmToken, 'platform': 'flutter', 'email': email}),
+    );
+    if (res.statusCode == 200 || res.statusCode == 204) {
+      _registeringTokens.remove(fcmToken);
+      return;
+    }
+    if (res.statusCode == 400 || res.statusCode == 401 || res.statusCode == 403) {
+      _registeringTokens.remove(fcmToken);
+      return;
+    }
+  } catch (_) {
+    // seguimos con reintentos
+  }
+
+  if (attempt >= _registerRetryDelays.length) {
+    _registeringTokens.remove(fcmToken);
+    return;
+  }
+  final delay = _registerRetryDelays[attempt];
+  Future.delayed(delay, () {
+    _attemptRegisterDeviceToken(
+      authToken: authToken,
+      email: email,
+      fcmToken: fcmToken,
+      attempt: attempt + 1,
+    );
+  });
+}
+
+Future<void> _registerDeviceTokenFromPrefs({String? fcmToken}) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final authToken = prefs.getString('authToken');
+    final email = prefs.getString('userEmail');
+    if (authToken == null || authToken.isEmpty || email == null || email.isEmpty) return;
+    await _registerDeviceTokenWithAuth(authToken: authToken, email: email, fcmToken: fcmToken);
+  } catch (_) {
+    // silencioso
+  }
+}
+
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await _initLocalNotifications();
@@ -65,9 +227,16 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 void _showRemoteMessage(RemoteMessage message) {
   final notification = message.notification;
-  if (notification == null) return;
-  final title = notification.title ?? 'Notiflow';
-  final body = notification.body ?? '';
+  final data = message.data;
+  final title = notification?.title ??
+      (data['title']?.toString()) ??
+      (data['notificationTitle']?.toString()) ??
+      'Notiflow';
+  final body = notification?.body ??
+      (data['body']?.toString()) ??
+      (data['message']?.toString()) ??
+      '';
+  if (title.trim().isEmpty && body.trim().isEmpty) return;
   const details = NotificationDetails(
     android: AndroidNotificationDetails(
       'notiflow_remote',
@@ -79,7 +248,7 @@ void _showRemoteMessage(RemoteMessage message) {
     ),
     iOS: DarwinNotificationDetails(presentAlert: true, presentBadge: true, presentSound: true),
   );
-  localNotifications.show(notification.hashCode, title, body, details, payload: message.data['route']);
+  localNotifications.show(message.hashCode, title, body, details, payload: message.data['route']);
 }
 
 class StudentOption {
@@ -87,8 +256,9 @@ class StudentOption {
   final String name;
   final String schoolId;
   final String? schoolName;
+  final String? course;
 
-  StudentOption({required this.id, required this.name, required this.schoolId, this.schoolName});
+  StudentOption({required this.id, required this.name, required this.schoolId, this.schoolName, this.course});
 
   factory StudentOption.fromJson(Map<String, dynamic> json) {
     return StudentOption(
@@ -96,7 +266,18 @@ class StudentOption {
       name: json['fullName'] as String? ?? '',
       schoolId: json['schoolId'] as String? ?? '',
       schoolName: json['schoolName'] as String?,
+      course: json['course'] as String?,
     );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'studentId': id,
+      'fullName': name,
+      'schoolId': schoolId,
+      'schoolName': schoolName,
+      'course': course,
+    };
   }
 }
 
@@ -217,6 +398,7 @@ class _SplashScreenState extends State<SplashScreen> {
     final hasMultipleStudents = prefs.getBool('hasMultipleStudents') ?? false;
     if (!mounted) return;
     if (freshToken != null && freshToken.isNotEmpty && email != null && email.isNotEmpty) {
+      await _registerDeviceTokenWithAuth(authToken: freshToken, email: email);
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -242,6 +424,9 @@ class _SplashScreenState extends State<SplashScreen> {
     final messaging = FirebaseMessaging.instance;
     await messaging.requestPermission();
     await messaging.setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
+    messaging.onTokenRefresh.listen((token) async {
+      await _registerDeviceTokenFromPrefs(fcmToken: token);
+    });
   }
 
   void _listenForegroundMessages() {
@@ -299,12 +484,20 @@ class _LoginPageState extends State<LoginPage> {
       final res = await http.post(
         Uri.parse('$apiBase/auth/otp/request'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'email': _email.text.trim()}),
+        body: jsonEncode({'email': _email.text.trim(), 'studentsOnly': true}),
       ).timeout(kTimeout);
       if (res.statusCode == 200) {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        final reviewerCode = body['reviewerCode'] as String?;
+        final serverMessage = body['message'] as String?;
         setState(() {
           _codeSent = true;
-          _infoMessage = 'Te enviamos un código a tu correo. Revisa bandeja y spam.';
+          if (reviewerCode != null && reviewerCode.isNotEmpty) {
+            _code.text = reviewerCode;
+            _infoMessage = 'Código de revisión: $reviewerCode';
+          } else {
+            _infoMessage = serverMessage ?? 'Te enviamos un código a tu correo. Revisa bandeja y spam.';
+          }
         });
       } else {
         final msg = jsonDecode(res.body)['message'] ?? 'No se pudo enviar código';
@@ -326,11 +519,9 @@ class _LoginPageState extends State<LoginPage> {
       _loading = true;
       _error = null;
       _infoMessage = null;
+      _needsStudentChoice = false;
     });
     try {
-      if (_needsStudentChoice && _selectedStudentId == null) {
-        throw Exception('Selecciona a qué estudiante corresponde tu correo');
-      }
       final res = await http.post(
         Uri.parse('$apiBase/auth/otp/verify'),
         headers: {'Content-Type': 'application/json'},
@@ -342,19 +533,20 @@ class _LoginPageState extends State<LoginPage> {
         }),
       ).timeout(kTimeout);
       if (res.statusCode == 409) {
+        if (_selectedStudentId != null) {
+          throw Exception('No se pudo validar el estudiante seleccionado. Intenta nuevamente.');
+        }
         final body = jsonDecode(res.body);
         final opts = (body['options'] as List<dynamic>? ?? [])
             .map((e) => StudentOption.fromJson(e as Map<String, dynamic>))
             .where((o) => o.id.isNotEmpty)
             .toList();
-        setState(() {
-          _needsStudentChoice = true;
-          _options = opts;
-          _selectedStudentId = opts.isNotEmpty ? opts.first.id : null;
-          _error = null;
-          _infoMessage = 'Selecciona el estudiante para continuar';
-        });
-        return;
+        if (opts.isEmpty) {
+          throw Exception(body['message'] ?? 'No se pudo validar el estudiante');
+        }
+        _options = opts;
+        _selectedStudentId = opts.first.id;
+        return await _verifyCode();
       }
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
@@ -367,19 +559,13 @@ class _LoginPageState extends State<LoginPage> {
             .whereType<StudentOption>()
             .toList();
 
-        if (_selectedStudentId == null && students.length > 1) {
-          // Si el backend no devolvió 409 pero hay varios alumnos, pedimos selección igual
-          setState(() {
-            _needsStudentChoice = true;
-            _options = students;
-            _selectedStudentId = students.first.id;
-            _infoMessage = 'Selecciona el estudiante/apoderado para continuar';
-          });
-          return;
+        final effectiveStudentId = _selectedStudentId ?? (students.isNotEmpty ? students.first.id : null);
+        if (effectiveStudentId != null) {
+          _selectedStudentId = effectiveStudentId;
         }
 
-        final chosenStudent = _selectedStudentId != null
-            ? students.firstWhere((s) => s.id == _selectedStudentId, orElse: () => students.isNotEmpty ? students.first : StudentOption(id: '', name: '', schoolId: ''))
+        final chosenStudent = effectiveStudentId != null
+            ? students.firstWhere((s) => s.id == effectiveStudentId, orElse: () => students.isNotEmpty ? students.first : StudentOption(id: '', name: '', schoolId: ''))
             : (students.isNotEmpty ? students.first : StudentOption(id: '', name: '', schoolId: ''));
         final name = (chosenStudent.name.isNotEmpty ? chosenStudent.name : null) ??
             (user?['name'] as String?) ??
@@ -397,7 +583,14 @@ class _LoginPageState extends State<LoginPage> {
         if (name != null) await prefs.setString('userName', name);
         if (schoolName != null) await prefs.setString('schoolName', schoolName);
         await prefs.setBool('hasMultipleStudents', hasMultipleStudents);
-        await _registerDeviceToken(token, email);
+        if (students.isNotEmpty) {
+          await prefs.setString('studentOptions', jsonEncode(students.map((s) => s.toJson()).toList()));
+          final selectedId = _selectedStudentId ?? chosenStudent.id;
+          if (selectedId.isNotEmpty) {
+            await prefs.setString('selectedStudentId', selectedId);
+          }
+        }
+        await _registerDeviceTokenWithAuth(authToken: token, email: email);
         if (!mounted) return;
         Navigator.pushReplacement(
           context,
@@ -425,20 +618,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _registerDeviceToken(String token, String email) async {
-    try {
-      final fcmToken = await FirebaseMessaging.instance.getToken();
-      if (fcmToken == null) return;
-      await http.post(
-        Uri.parse('$apiBase/devices/register'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({'token': fcmToken, 'platform': 'flutter'}),
-      ).timeout(kTimeout);
-    } catch (_) {
-      // silencioso
-    }
+    await _registerDeviceTokenWithAuth(authToken: token, email: email);
   }
 
   Future<String?> _refreshAccessToken(String refreshToken, SharedPreferences prefs) async {
@@ -714,16 +894,66 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int _index = 0;
+  bool _notificationsDisabled = false;
+  List<StudentOption> _studentOptions = [];
+  String _activeStudentId = '';
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkNotificationPermission();
+    _loadStudentOptions();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkNotificationPermission();
+    }
+  }
+
+  Future<void> _checkNotificationPermission() async {
+    try {
+      final settings = await FirebaseMessaging.instance.getNotificationSettings();
+      final disabled = settings.authorizationStatus == AuthorizationStatus.denied;
+      if (!mounted) return;
+      setState(() => _notificationsDisabled = disabled);
+    } catch (_) {
+      // silencioso
+    }
+  }
+
+  Future<void> _openNotificationSettings() async {
+    try {
+      await AppSettings.openAppSettings();
+    } catch (_) {
+      try {
+        await launchUrl(Uri.parse('app-settings:'), mode: LaunchMode.externalApplication);
+      } catch (_) {
+        // silencioso
+      }
+    }
+  }
 
   void _logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('authToken');
+    await prefs.remove('refreshToken');
     await prefs.remove('userEmail');
     await prefs.remove('userName');
     await prefs.remove('schoolName');
     await prefs.remove('hasMultipleStudents');
+    await prefs.remove('studentOptions');
+    await prefs.remove('selectedStudentId');
     if (!mounted) return;
     Navigator.pushAndRemoveUntil(
       context,
@@ -732,19 +962,93 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  Future<void> _loadStudentOptions() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('studentOptions');
+      final storedId = prefs.getString('selectedStudentId');
+      List<StudentOption> options = [];
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          options = decoded
+              .map((e) => e is Map<String, dynamic> ? StudentOption.fromJson(e) : null)
+              .whereType<StudentOption>()
+              .toList();
+        }
+      }
+      String activeId = storedId ?? _activeStudentId;
+      if (options.isNotEmpty) {
+        final exists = options.any((s) => s.id == activeId);
+        if (!exists) {
+          activeId = options.first.id;
+        }
+      } else {
+        activeId = '';
+      }
+      if (!mounted) return;
+      setState(() {
+        _studentOptions = options;
+        _activeStudentId = activeId;
+      });
+    } catch (_) {
+      // silencioso
+    }
+  }
+
+  Future<void> _setActiveStudent(String id) async {
+    setState(() => _activeStudentId = id);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('selectedStudentId', id);
+    } catch (_) {
+      // silencioso
+    }
+  }
+
+  String _firstName(String name) {
+    final clean = name.trim();
+    if (clean.isEmpty) return 'Alumno';
+    final parts = clean.split(RegExp(r'\s+'));
+    return parts.isNotEmpty ? parts.first : clean;
+  }
+
+  String _initialLetter(String name) {
+    final first = _firstName(name);
+    return first.isNotEmpty ? first.substring(0, 1).toUpperCase() : 'A';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final activeStudentId = _activeStudentId.isNotEmpty ? _activeStudentId : null;
     final pages = [
-      MuroPage(token: widget.token),
-      CalendarioPage(token: widget.token),
-      MessagesPage(token: widget.token, email: widget.email),
+      MuroPage(token: widget.token, studentId: activeStudentId),
+      CalendarioPage(token: widget.token, studentId: activeStudentId),
+      MessagesPage(token: widget.token, email: widget.email, studentId: activeStudentId),
     ];
     final titles = ['Muro', 'Eventos', 'Mensajes'];
     final icons = [Icons.campaign_outlined, Icons.event, Icons.message_outlined];
 
+    final hasMultiple = _studentOptions.length > 1 || widget.hasMultipleStudents;
+    final selectedStudent = _studentOptions.isEmpty
+        ? null
+        : _studentOptions.firstWhere(
+            (s) => s.id == _activeStudentId,
+            orElse: () => _studentOptions.first,
+          );
+    final selectedSchoolLabel = selectedStudent == null
+        ? ''
+        : ((selectedStudent.schoolName != null && selectedStudent.schoolName!.trim().isNotEmpty)
+            ? selectedStudent.schoolName!.trim()
+            : selectedStudent.schoolId);
+    final selectedName = selectedStudent?.name ?? '';
+    final selectedFullName = selectedName.trim().isNotEmpty ? selectedName.trim() : 'Alumno';
+    final selectedFirstName = _firstName(selectedFullName);
+    final selectedInitial = _initialLetter(selectedFullName);
+    final selectedCourse = (selectedStudent?.course ?? '').trim();
+    final accountName = widget.userName ?? widget.studentName ?? 'Cuenta';
     final schoolLabel = widget.schoolName ??
-        (widget.hasMultipleStudents ? 'tus colegios' : 'tu colegio');
-    final displayName = widget.studentName ?? widget.userName ?? 'Cuenta';
+        (hasMultiple ? 'tus colegios' : 'tu colegio');
 
     return Scaffold(
       body: SafeArea(
@@ -765,70 +1069,262 @@ class _HomeShellState extends State<HomeShell> {
                   ],
                 ),
                 padding: const EdgeInsets.all(14),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          colors: [kPrimary, kPrimary.withOpacity(0.6)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        boxShadow: [
-                          BoxShadow(color: kPrimary.withOpacity(0.18), blurRadius: 12, offset: const Offset(0, 6)),
-                        ],
-                      ),
-                      padding: const EdgeInsets.all(6),
-                      child: Container(
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white,
-                        ),
-                        padding: const EdgeInsets.all(8),
-                        child: Image.asset('assets/logos/Blanco.png', fit: BoxFit.contain),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Notiflow',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: kSecondary),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            schoolLabel,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.2),
-                          ),
-                          const SizedBox(height: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: kSecondary.withOpacity(0.06),
-                              borderRadius: BorderRadius.circular(10),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 56,
+                          height: 56,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: LinearGradient(
+                              colors: [kPrimary, kPrimary.withOpacity(0.6)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
                             ),
-                            child: Text(
-                              '¡Bienvenido, $displayName!',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 12, color: kSecondary, fontWeight: FontWeight.w700),
-                            ),
+                            boxShadow: [
+                              BoxShadow(color: kPrimary.withOpacity(0.18), blurRadius: 12, offset: const Offset(0, 6)),
+                            ],
                           ),
-                        ],
+                          padding: const EdgeInsets.all(6),
+                          child: Container(
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white,
+                            ),
+                            padding: const EdgeInsets.all(8),
+                            child: Image.asset('assets/logos/Blanco.png', fit: BoxFit.contain),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Notiflow',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: kSecondary),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                schoolLabel,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 13, color: Colors.black87, height: 1.2),
+                              ),
+                              const SizedBox(height: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: kSecondary.withOpacity(0.06),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  '¡Bienvenido, $accountName!',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 12, color: kSecondary, fontWeight: FontWeight.w700),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: _logout,
+                          icon: const Icon(Icons.logout_rounded, color: kSecondary),
+                          tooltip: 'Cerrar sesión',
+                        ),
+                      ],
+                    ),
+                    if (_studentOptions.length > 1) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: kSecondary.withOpacity(0.03),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: kSecondary.withOpacity(0.12)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                CircleAvatar(
+                                  radius: 12,
+                                  backgroundColor: kPrimary.withOpacity(0.14),
+                                  child: Text(
+                                    selectedInitial,
+                                    style: const TextStyle(
+                                      color: kPrimary,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Alumno',
+                                        style: TextStyle(fontSize: 9, color: kSecondary, fontWeight: FontWeight.w700),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(color: kSecondary.withOpacity(0.12)),
+                                        ),
+                                        child: DropdownButtonHideUnderline(
+                                          child: DropdownButton<String>(
+                                            value: _activeStudentId,
+                                            isDense: true,
+                                            isExpanded: true,
+                                            icon: const Icon(Icons.expand_more, size: 18),
+                                            itemHeight: null,
+                                            selectedItemBuilder: (context) {
+                                              return _studentOptions.map((s) {
+                                                final fullName = s.name.isNotEmpty ? s.name : 'Alumno';
+                                                final firstName = _firstName(fullName);
+                                                final initial = _initialLetter(fullName);
+                                                return Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    CircleAvatar(
+                                                      radius: 10,
+                                                      backgroundColor: kPrimary.withOpacity(0.12),
+                                                      child: Text(
+                                                        initial,
+                                                        style: const TextStyle(
+                                                          color: kPrimary,
+                                                          fontWeight: FontWeight.w800,
+                                                          fontSize: 11,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Flexible(
+                                                      child: Text(
+                                                        firstName,
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow.ellipsis,
+                                                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                );
+                                              }).toList();
+                                            },
+                                            items: _studentOptions
+                                                .map(
+                                                  (s) {
+                                                    final fullName = s.name.isNotEmpty ? s.name : 'Alumno';
+                                                    final course = (s.course ?? '').trim();
+                                                    final initial = _initialLetter(fullName);
+                                                    return DropdownMenuItem(
+                                                      value: s.id,
+                                                      child: Row(
+                                                        children: [
+                                                          CircleAvatar(
+                                                            radius: 12,
+                                                            backgroundColor: kPrimary.withOpacity(0.12),
+                                                            child: Text(
+                                                              initial,
+                                                              style: const TextStyle(
+                                                                color: kPrimary,
+                                                                fontWeight: FontWeight.w800,
+                                                                fontSize: 11,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(width: 10),
+                                                          Expanded(
+                                                            child: Column(
+                                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                                        children: [
+                                                          Text(
+                                                            fullName,
+                                                            maxLines: 2,
+                                                            overflow: TextOverflow.ellipsis,
+                                                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+                                                          ),
+                                                          if (course.isNotEmpty)
+                                                            Text(
+                                                              course,
+                                                              maxLines: 1,
+                                                              overflow: TextOverflow.ellipsis,
+                                                              style: const TextStyle(fontSize: 8, color: Colors.black54),
+                                                            ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                                    );
+                                                  },
+                                                )
+                                                .toList(),
+                                            onChanged: (value) {
+                                              if (value == null) return;
+                                              _setActiveStudent(value);
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (selectedStudent != null) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                'Nombre: $selectedFullName · Colegio: ${selectedSchoolLabel.isNotEmpty ? selectedSchoolLabel : '—'} · Curso: ${selectedCourse.isNotEmpty ? selectedCourse : '—'}',
+                                style: const TextStyle(fontSize: 9, color: Colors.black54, fontWeight: FontWeight.w600),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
-                    ),
-                    IconButton(
-                      onPressed: _logout,
-                      icon: const Icon(Icons.logout_rounded, color: kSecondary),
-                      tooltip: 'Cerrar sesión',
-                    ),
+                    ],
+                    if (_notificationsDisabled && _index == 0) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.orange.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.notifications_off, color: Colors.orange, size: 16),
+                            const SizedBox(width: 6),
+                            const Expanded(
+                              child: Text(
+                                'Notificaciones desactivadas',
+                                style: TextStyle(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.w700),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: _openNotificationSettings,
+                              child: const Text('Activar'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -873,7 +1369,8 @@ class _HomeShellState extends State<HomeShell> {
 
 class MuroPage extends StatefulWidget {
   final String token;
-  const MuroPage({super.key, required this.token});
+  final String? studentId;
+  const MuroPage({super.key, required this.token, this.studentId});
 
   @override
   State<MuroPage> createState() => _MuroPageState();
@@ -891,6 +1388,14 @@ class _MuroPageState extends State<MuroPage> {
   void initState() {
     super.initState();
     _loadWall();
+  }
+
+  @override
+  void didUpdateWidget(covariant MuroPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.studentId != widget.studentId) {
+      _loadWall();
+    }
   }
 
   bool _isBroadcast(Map msg) {
@@ -918,18 +1423,12 @@ class _MuroPageState extends State<MuroPage> {
         return [];
       }
       // Intento principal: mensajes sin filtro (puede fallar por permisos)
-      final res = await http.get(
-        Uri.parse('$apiBase/messages'),
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      ).timeout(kTimeout);
+      final res = await _authedGet(_messagesUrl(), token: widget.token);
       if (res.statusCode == 200) {
         data = _extractList(jsonDecode(res.body));
       } else {
         // Fallback: usar mensajes personales y filtrar los masivos
-        final resSelf = await http.get(
-          Uri.parse('$apiBase/messages?self=true'),
-          headers: {'Authorization': 'Bearer ${widget.token}'},
-        ).timeout(kTimeout);
+        final resSelf = await _authedGet(_messagesUrl(self: true), token: widget.token);
         if (resSelf.statusCode == 200) {
           data = _extractList(jsonDecode(resSelf.body));
         } else {
@@ -965,6 +1464,17 @@ class _MuroPageState extends State<MuroPage> {
       if (!mounted) return;
       setState(() => _loading = false);
     }
+  }
+
+  String _messagesUrl({bool self = false}) {
+    final params = <String, String>{};
+    if (self) params['self'] = 'true';
+    final studentId = widget.studentId;
+    if (studentId != null && studentId.isNotEmpty) {
+      params['studentId'] = studentId;
+    }
+    if (params.isEmpty) return '$apiBase/messages';
+    return Uri.parse('$apiBase/messages').replace(queryParameters: params).toString();
   }
 
   String _formatDate(String? iso) {
@@ -1192,7 +1702,8 @@ class _MuroPageState extends State<MuroPage> {
 
 class CalendarioPage extends StatefulWidget {
   final String token;
-  const CalendarioPage({super.key, required this.token});
+  final String? studentId;
+  const CalendarioPage({super.key, required this.token, this.studentId});
 
   @override
   State<CalendarioPage> createState() => _CalendarioPageState();
@@ -1212,18 +1723,21 @@ class _CalendarioPageState extends State<CalendarioPage> {
     _fetchEvents();
   }
 
+  @override
+  void didUpdateWidget(covariant CalendarioPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.studentId != widget.studentId) {
+      _fetchEvents();
+    }
+  }
+
   Future<void> _fetchEvents() async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final res = await http
-          .get(
-            Uri.parse('$apiBase/events'),
-            headers: {'Authorization': 'Bearer ${widget.token}'},
-          )
-          .timeout(kTimeout);
+      final res = await _authedGet(_eventsUrl(), token: widget.token);
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         if (data is List) {
@@ -1241,6 +1755,16 @@ class _CalendarioPageState extends State<CalendarioPage> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  String _eventsUrl() {
+    final params = <String, String>{};
+    final studentId = widget.studentId;
+    if (studentId != null && studentId.isNotEmpty) {
+      params['studentId'] = studentId;
+    }
+    if (params.isEmpty) return '$apiBase/events';
+    return Uri.parse('$apiBase/events').replace(queryParameters: params).toString();
   }
 
   Map<String, int> _buildDayCounts(List<Map<String, dynamic>> events) {
@@ -1613,7 +2137,8 @@ class _CalendarioPageState extends State<CalendarioPage> {
 class MessagesPage extends StatefulWidget {
   final String token;
   final String email;
-  const MessagesPage({super.key, required this.token, required this.email});
+  final String? studentId;
+  const MessagesPage({super.key, required this.token, required this.email, this.studentId});
 
   @override
   State<MessagesPage> createState() => _MessagesPageState();
@@ -1672,6 +2197,14 @@ class _MessagesPageState extends State<MessagesPage> {
     _loadMessages();
   }
 
+  @override
+  void didUpdateWidget(covariant MessagesPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.studentId != widget.studentId) {
+      _loadMessages();
+    }
+  }
+
   Future<void> _loadMessages() async {
     if (!mounted) return;
     setState(() {
@@ -1687,10 +2220,7 @@ class _MessagesPageState extends State<MessagesPage> {
         }
         return [];
       }
-      final res = await http.get(
-        Uri.parse('$apiBase/messages?self=true'),
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      );
+      final res = await _authedGet(_messagesUrl(), token: widget.token);
       if (res.statusCode == 200) {
         final data = _extractList(jsonDecode(res.body));
         final localRead = await _loadLocalReadIds();
@@ -1726,6 +2256,15 @@ class _MessagesPageState extends State<MessagesPage> {
       if (!mounted) return;
       setState(() => _loading = false);
     }
+  }
+
+  String _messagesUrl() {
+    final params = <String, String>{'self': 'true'};
+    final studentId = widget.studentId;
+    if (studentId != null && studentId.isNotEmpty) {
+      params['studentId'] = studentId;
+    }
+    return Uri.parse('$apiBase/messages').replace(queryParameters: params).toString();
   }
 
   @override
@@ -1973,10 +2512,7 @@ class _MessagesPageState extends State<MessagesPage> {
                           onTap: () async {
                             Map fullMessage = Map.from(m as Map);
                             try {
-                              final res = await http.get(
-                                Uri.parse('$apiBase/messages/${m['id']}'),
-                                headers: {'Authorization': 'Bearer ${widget.token}'},
-                              ).timeout(kTimeout);
+                              final res = await _authedGet('$apiBase/messages/${m['id']}', token: widget.token);
                               if (res.statusCode == 200) {
                                 fullMessage = jsonDecode(res.body) as Map<String, dynamic>;
                               }
@@ -2009,13 +2545,13 @@ class _MessagesPageState extends State<MessagesPage> {
     final id = message['id'] as String?;
     if (id == null) return;
     try {
-      await http.post(
-        Uri.parse('$apiBase/messages/$id/read'),
+      await _authedPost(
+        '$apiBase/messages/$id/read',
+        token: widget.token,
         headers: {
-          'Authorization': 'Bearer ${widget.token}',
           'Content-Type': 'application/json',
         },
-      ).timeout(kTimeout);
+      );
       await _persistReadId(id);
       if (!mounted) return;
       setState(() {
@@ -2087,12 +2623,7 @@ class _MessageDetailBodyState extends State<_MessageDetailBody> {
       return;
     }
     try {
-      final res = await http.get(
-        Uri.parse('$apiBase/messages/$id'),
-        headers: {
-          'Authorization': 'Bearer ${await _tokenFromPrefs() ?? widget.token}',
-        },
-      ).timeout(kTimeout);
+      final res = await _authedGet('$apiBase/messages/$id', token: widget.token);
       if (res.statusCode == 200) {
         final map = jsonDecode(res.body) as Map<String, dynamic>;
         if (!mounted) return;
@@ -2113,11 +2644,6 @@ class _MessageDetailBodyState extends State<_MessageDetailBody> {
       if (!mounted) return;
       setState(() => _loading = false);
     }
-  }
-
-  Future<String?> _tokenFromPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('authToken');
   }
 
   String _formatDateFriendly(String? iso) {

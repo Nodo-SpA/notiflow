@@ -76,24 +76,45 @@ public class AccessControlService {
             return cached.permissions();
         }
         try {
-            DocumentReference ref = firestore.collection("rolePermissions").document(key);
-            ApiFuture<DocumentSnapshot> future = ref.get();
-            DocumentSnapshot snap = future.get();
-            if (!snap.exists()) {
-                log.warn("No hay permisos definidos para el rol {}", key);
-                cache.put(key, new CachedPermissions(Collections.emptySet(), Instant.now().plusSeconds(CACHE_TTL_SECONDS)));
-                return Collections.emptySet();
+            List<String> candidates = permissionRoleCandidates(key);
+            for (String candidate : candidates) {
+                DocumentReference ref = firestore.collection("rolePermissions").document(candidate);
+                ApiFuture<DocumentSnapshot> future = ref.get();
+                DocumentSnapshot snap = future.get();
+                if (!snap.exists()) {
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                List<String> raw = (List<String>) snap.get("permissions");
+                Set<String> perms = raw == null
+                        ? Collections.emptySet()
+                        : raw.stream().map(String::toLowerCase).collect(Collectors.toSet());
+                CachedPermissions fresh = new CachedPermissions(perms, Instant.now().plusSeconds(CACHE_TTL_SECONDS));
+                cache.put(key, fresh);
+                if (!candidate.equals(key)) {
+                    log.info("Permisos para rol {} resueltos usando alias {}", key, candidate);
+                }
+                return fresh.permissions();
             }
-            @SuppressWarnings("unchecked")
-            List<String> raw = (List<String>) snap.get("permissions");
-            Set<String> perms = raw == null ? Collections.emptySet() : raw.stream().map(String::toLowerCase).collect(Collectors.toSet());
-            cache.put(key, new CachedPermissions(perms, Instant.now().plusSeconds(CACHE_TTL_SECONDS)));
-            return perms;
+            log.warn("No hay permisos definidos para el rol {} (candidatos: {})", key, candidates);
+            cache.put(key, new CachedPermissions(Collections.emptySet(), Instant.now().plusSeconds(CACHE_TTL_SECONDS)));
+            return Collections.emptySet();
         } catch (InterruptedException | ExecutionException e) {
             Thread.currentThread().interrupt();
             log.error("Error cargando permisos para rol {}", key, e);
             return Collections.emptySet();
         }
+    }
+
+    private List<String> permissionRoleCandidates(String roleKey) {
+        List<String> candidates = new java.util.ArrayList<>();
+        candidates.add(roleKey);
+        if ("DIRECTOR".equals(roleKey) || "GESTION_ESCOLAR".equals(roleKey)) {
+            candidates.add("COORDINATOR");
+        } else if ("COORDINATOR".equals(roleKey)) {
+            candidates.add("DIRECTOR");
+        }
+        return candidates;
     }
 
     private org.springframework.web.server.ResponseStatusException forbidden(String reason) {

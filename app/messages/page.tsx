@@ -141,7 +141,8 @@ export default function MessagesPage() {
   const { year } = useYearStore();
   const hasPermission = useAuthStore((state) => state.hasPermission);
   const currentUser = useAuthStore((state) => state.user);
-  const canList = hasPermission('messages.list');
+  const isTeacher = (currentUser?.role || '').toLowerCase() === 'teacher';
+  const canList = isTeacher || hasPermission('messages.list');
   const canCreate = hasPermission('messages.create');
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [loading, setLoading] = useState(false);

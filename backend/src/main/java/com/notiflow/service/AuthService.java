@@ -106,22 +106,14 @@ public class AuthService {
             }
             var first = chosen.get(0);
             String schoolId = first.getSchoolId() == null ? "" : first.getSchoolId();
-            String schoolName = "Colegio";
-            try {
-                if (schoolService != null && schoolId != null && !schoolId.isBlank()) {
-                    var school = schoolService.getById(schoolId);
-                    if (school != null && school.getName() != null && !school.getName().isBlank()) {
-                        schoolName = school.getName();
-                    }
-                }
-            } catch (Exception ex) {
-                log.warn("No se pudo obtener nombre de colegio para {}: {}", schoolId, ex.getMessage());
-            }
+            String schoolName = resolveSchoolName(schoolId);
             var options = students.stream()
                     .map(s -> new StudentOption(
                             s.getId(),
-                            buildGuardianDisplayName(s, normalized),
-                            s.getSchoolId()
+                            buildStudentDisplayName(s),
+                            s.getSchoolId(),
+                            resolveSchoolName(s.getSchoolId()),
+                            s.getCourse()
                     ))
                     .toList();
             UserDocument doc = new UserDocument();
@@ -135,6 +127,20 @@ public class AuthService {
         }
 
         throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.UNAUTHORIZED, "Correo no asociado a apoderados ni usuarios");
+    }
+
+    private String resolveSchoolName(String schoolId) {
+        String fallback = "Colegio";
+        if (schoolService == null || schoolId == null || schoolId.isBlank()) return fallback;
+        try {
+            var school = schoolService.getById(schoolId);
+            if (school != null && school.getName() != null && !school.getName().isBlank()) {
+                return school.getName();
+            }
+        } catch (Exception ex) {
+            log.warn("No se pudo obtener nombre de colegio para {}: {}", schoolId, ex.getMessage());
+        }
+        return fallback;
     }
 
     private String buildGuardianDisplayName(com.notiflow.model.StudentDocument s, String email) {
@@ -156,6 +162,15 @@ public class AuthService {
                 (s.getGuardianLastName() == null ? "" : s.getGuardianLastName())).trim();
         if (!legacy.isBlank()) return legacy;
         return (s.getFirstName() == null ? "" : s.getFirstName()) + " " + (s.getLastNameFather() == null ? "" : s.getLastNameFather());
+    }
+
+    private String buildStudentDisplayName(com.notiflow.model.StudentDocument s) {
+        if (s == null) return "Alumno";
+        String first = s.getFirstName() == null ? "" : s.getFirstName();
+        String lastF = s.getLastNameFather() == null ? "" : s.getLastNameFather();
+        String lastM = s.getLastNameMother() == null ? "" : s.getLastNameMother();
+        String name = (first + " " + lastF + " " + lastM).trim().replaceAll(" +", " ");
+        return name.isBlank() ? "Alumno" : name;
     }
 
     private AuthResponse buildAuthResponse(UserDocument doc, java.util.List<StudentOption> linkedStudents) {

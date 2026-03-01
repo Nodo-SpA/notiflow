@@ -108,6 +108,7 @@ class APIClient {
     year?: string;
     reason?: string;
     groupIds?: string[];
+    studentIds?: string[];
     attachments?: {
       fileName: string;
       mimeType: string;
@@ -198,6 +199,10 @@ class APIClient {
   }
   ) {
     return this.client.put(`/students/${id}`, data);
+  }
+
+  async deleteStudent(id: string) {
+    return this.client.delete(`/students/${id}`);
   }
 
   // Datos de escuela
@@ -331,6 +336,10 @@ class APIClient {
 
   async deleteGroup(id: string) {
     return this.client.delete(`/groups/${id}`);
+  }
+
+  async rebuildCourseGroups(params?: { schoolId?: string; year?: string }) {
+    return this.client.post('/groups/rebuild-courses', null, { params });
   }
 
   async forgotPassword(email: string) {

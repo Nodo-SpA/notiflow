@@ -30,6 +30,7 @@ export default function EventsPage() {
   const user = useAuthStore((state) => state.user);
   const hasPermission = useAuthStore((state) => state.hasPermission);
   const role = (user?.role || '').toUpperCase();
+  const isTeacher = role === 'TEACHER';
   const canCreate =
     role === 'SUPERADMIN' || role === 'ADMIN' || role === 'TEACHER' || hasPermission('events.create');
   const today = useMemo(() => new Date(), []);
@@ -68,6 +69,8 @@ export default function EventsPage() {
   const [users, setUsers] = useState<{ id: string; name: string; email?: string; badge?: string }[]>([]);
   const [groups, setGroups] = useState<{ id: string; name: string; memberIds?: string[] }[]>([]);
   const [students, setStudents] = useState<{ id: string; name: string; email?: string }[]>([]);
+  const [allowedGroupIds, setAllowedGroupIds] = useState<string[] | null>(null);
+  const [loadingAllowedGroups, setLoadingAllowedGroups] = useState(false);
   const [loadingRecipients, setLoadingRecipients] = useState(false);
   const [recipientSearch, setRecipientSearch] = useState('');
   const [groupSearch, setGroupSearch] = useState('');
@@ -137,29 +140,78 @@ export default function EventsPage() {
   const loadRecipients = async () => {
     setLoadingRecipients(true);
     try {
+      const loadAllUsers = async () => {
+        const all: any[] = [];
+        const pageSize = 100;
+        let page = 1;
+        while (true) {
+          const res = await apiClient.getUsers({ page, pageSize });
+          const raw = res.data;
+          const chunk = Array.isArray(raw) ? raw : raw?.items || [];
+          all.push(...chunk);
+          const hasMore = Array.isArray(raw) ? chunk.length === pageSize : raw?.hasMore === true;
+          if (!hasMore || chunk.length === 0) break;
+          page += 1;
+          if (page > 50) break;
+        }
+        return all;
+      };
+
+      const loadAllGroups = async () => {
+        const all: any[] = [];
+        const pageSize = 100;
+        let page = 1;
+        while (true) {
+          const res = await apiClient.getGroups(undefined, effectiveYear, undefined, page, pageSize);
+          const raw = res.data;
+          const chunk = Array.isArray(raw) ? raw : raw?.items || [];
+          all.push(...chunk);
+          const hasMore = Array.isArray(raw) ? chunk.length === pageSize : raw?.hasMore === true;
+          if (!hasMore || chunk.length === 0) break;
+          page += 1;
+          if (page > 50) break;
+        }
+        return all;
+      };
+
+      const loadAllStudents = async () => {
+        const all: any[] = [];
+        const pageSize = 200;
+        let page = 1;
+        let hasMore = true;
+        while (hasMore) {
+          const res = await apiClient.getStudents({
+            page,
+            pageSize,
+            schoolId: user?.schoolId || undefined,
+            year: effectiveYear,
+          });
+          const data = (res as any)?.data || {};
+          const chunk = data.items || [];
+          all.push(...chunk);
+          hasMore = data.hasMore === true;
+          if (!hasMore || chunk.length === 0) break;
+          page += 1;
+          if (page > 50) break;
+        }
+        return all;
+      };
+
       const [usersRes, groupsRes, studentsRes] = await Promise.allSettled([
-        apiClient.getUsers(),
-        apiClient.getGroups(undefined, effectiveYear),
-        apiClient.getStudents({
-          page: 1,
-          pageSize: 500,
-          schoolId: user?.schoolId || undefined,
-          year: effectiveYear,
-        }),
+        loadAllUsers(),
+        loadAllGroups(),
+        loadAllStudents(),
       ]);
+
       if (usersRes.status === 'fulfilled') {
-        const u = usersRes.value.data || [];
-        setUsers(u.map((x: any) => ({ ...x, badge: 'Usuario' })));
+        setUsers((usersRes.value || []).map((x: any) => ({ ...x, badge: 'Usuario' })));
       }
       if (groupsRes.status === 'fulfilled') {
-        const data = groupsRes.value.data || [];
-        setGroups((data as any).items ?? data ?? []);
+        setGroups(groupsRes.value || []);
       }
-      if (studentsRes && studentsRes.status === 'fulfilled') {
-        const data = (studentsRes.value as any)?.data || {};
-        const items = data.items || [];
+      if (studentsRes.status === 'fulfilled') {
         setStudents(
-          items.map((s: any) => ({
+          (studentsRes.value || []).map((s: any) => ({
             id: s.id,
             name: `${s.firstName || ''} ${s.lastNameFather || ''} ${s.lastNameMother || ''}`.trim(),
             email: s.email,
@@ -172,9 +224,45 @@ export default function EventsPage() {
   };
 
   useEffect(() => {
+    if (!isTeacher || !user?.email) {
+      setAllowedGroupIds(null);
+      return;
+    }
+    let active = true;
+    setLoadingAllowedGroups(true);
+    apiClient
+      .getTeacherPermissions()
+      .then((res) => {
+        if (!active) return;
+        const list = Array.isArray(res.data) ? res.data : [];
+        const match = list.find(
+          (p: any) => (p?.email || '').toLowerCase() === user.email?.toLowerCase()
+        );
+        const allowed = (match?.allowedGroupIds || list[0]?.allowedGroupIds || []) as string[];
+        setAllowedGroupIds(Array.isArray(allowed) ? allowed : []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setAllowedGroupIds([]);
+      })
+      .finally(() => {
+        if (!active) return;
+        setLoadingAllowedGroups(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isTeacher, user?.email]);
+
+  useEffect(() => {
     loadEvents();
     loadRecipients();
-  }, [effectiveYear]);
+  }, [effectiveYear, user?.schoolId]);
+
+  useEffect(() => {
+    if (!isTeacher || !allowedGroupIds) return;
+    setSelectedGroupIds((prev) => prev.filter((id) => allowedGroupIds.includes(id)));
+  }, [isTeacher, allowedGroupIds]);
 
   const filteredEvents = useMemo(() => {
     const term = search.toLowerCase();
@@ -200,7 +288,7 @@ export default function EventsPage() {
         const db = new Date(b.startDateTime || b.createdAt || '').getTime();
         return da - db;
       });
-  }, [events, search, filterType, currentYear]);
+  }, [events, search, filterType, effectiveYear, currentYear]);
 
   const filteredByMode = useMemo(() => {
     if (!showUpcomingOnly) return filteredEvents;
@@ -238,9 +326,50 @@ export default function EventsPage() {
     }
   };
 
+  const availableGroups = useMemo(() => {
+    if (!isTeacher) return groups;
+    if (!allowedGroupIds) return [];
+    const allowed = new Set(allowedGroupIds);
+    return groups.filter((g) => allowed.has(g.id));
+  }, [groups, isTeacher, allowedGroupIds]);
+
+  const teacherAllowedSets = useMemo(() => {
+    if (!isTeacher || !allowedGroupIds) {
+      return { ids: new Set<string>(), emails: new Set<string>() };
+    }
+    const allowed = new Set(allowedGroupIds);
+    const ids = new Set<string>();
+    const emails = new Set<string>();
+    groups.forEach((g) => {
+      if (!allowed.has(g.id)) return;
+      (g.memberIds || []).forEach((m) => {
+        const raw = (m || '').trim();
+        if (!raw) return;
+        if (raw.includes('@')) {
+          emails.add(raw.toLowerCase());
+        } else {
+          ids.add(raw);
+        }
+      });
+    });
+    return { ids, emails };
+  }, [groups, isTeacher, allowedGroupIds]);
+
+  const availableStudents = useMemo(() => {
+    if (!isTeacher) return students;
+    const ids = teacherAllowedSets.ids;
+    const emails = teacherAllowedSets.emails;
+    if (!allowedGroupIds || allowedGroupIds.length === 0) return [];
+    return students.filter((s) => {
+      if (ids.has(s.id)) return true;
+      const email = (s.email || '').trim().toLowerCase();
+      return email && emails.has(email);
+    });
+  }, [students, isTeacher, teacherAllowedSets, allowedGroupIds]);
+
   const combinedRecipients = useMemo(() => {
     const base = [
-      ...students.map((s) => ({
+      ...availableStudents.map((s) => ({
         id: s.email || s.id,
         name: s.name,
         email: s.email,
@@ -261,13 +390,13 @@ export default function EventsPage() {
         (r.email || '').toLowerCase().includes(term) ||
         (r.badge || '').toLowerCase().includes(term)
     );
-  }, [users, students, recipientSearch]);
+  }, [users, availableStudents, recipientSearch]);
 
   const filteredGroups = useMemo(() => {
-    if (!groupSearch.trim()) return groups;
+    if (!groupSearch.trim()) return availableGroups;
     const term = groupSearch.toLowerCase();
-    return groups.filter((g) => g.name.toLowerCase().includes(term));
-  }, [groups, groupSearch]);
+    return availableGroups.filter((g) => g.name.toLowerCase().includes(term));
+  }, [availableGroups, groupSearch]);
 
   const resetForm = () => {
     setTitle('');
@@ -837,8 +966,8 @@ export default function EventsPage() {
                     className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
                   />
                   <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
-                    {loadingRecipients && <p className="text-sm text-gray-500">Cargando...</p>}
-                    {!loadingRecipients &&
+                    {(loadingRecipients || loadingAllowedGroups) && <p className="text-sm text-gray-500">Cargando...</p>}
+                    {!(loadingRecipients || loadingAllowedGroups) &&
                       combinedRecipients.map((u) => (
                         <label
                           key={u.id}
@@ -892,8 +1021,8 @@ export default function EventsPage() {
                     className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent border-gray-200"
                   />
                   <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
-                    {loadingRecipients && <p className="text-sm text-gray-500">Cargando...</p>}
-                    {!loadingRecipients &&
+                    {(loadingRecipients || loadingAllowedGroups) && <p className="text-sm text-gray-500">Cargando...</p>}
+                    {!(loadingRecipients || loadingAllowedGroups) &&
                       filteredGroups.map((g) => (
                         <label
                           key={g.id}
