@@ -1,0 +1,42 @@
+{
+  "restoreTerminals.runOnStartup": true,
+  "restoreTerminals.terminals": [
+    {
+      "splitTerminals": [
+        {
+          "name": "Construir Imagen",
+          "icon": "tools",
+          "color": "terminal.ansiBlue",
+          "commands": [
+            "cd backend",
+            "echo \"gcloud builds submit --tag us-central1-docker.pkg.dev/notiflow-480919/notiflow-repo/notiflow-backend\""
+          ]
+        },
+        {
+          "name": "Desplegar Backend",
+          "icon": "cloud-upload",
+          "color": "terminal.ansiGreen",
+          "commands": [
+            "echo \"gcloud run deploy notiflow-backend \\",
+            "  --image us-central1-docker.pkg.dev/notiflow-480919/notiflow-repo/notiflow-backend \\",
+            "  --region us-central1 \\",
+            "  --allow-unauthenticated \\",
+            "  --ingress all \\",
+            "  --service-account notiflow-run-sa@notiflow-480919.iam.gserviceaccount.com \\",
+            "  --env-vars-file backend/env.vars.yaml \\",
+            "  --set-secrets JWT_SECRET=notiflow-jwt-secret:latest,SUPER_ADMIN_EMAIL=notiflow-super-admin-email:latest,app.fcm.credentials-json=notiflow-fcm-admin:latest,SENDGRID_API_KEY=notiflow-sendgrid-key:latest,APP_CRON_SECRET=app-cron-secret:latest\""
+          ]
+        },
+        {
+          "name": "Desplegar UI",
+          "icon": "rocket",
+          "color": "terminal.ansiYellow",
+          "commands": [
+            "echo \"CUSTOM_DOMAIN=true GITHUB_PAGES=true npm run build:gh\"",
+            "echo \"npx gh-pages -d out -f\""
+          ]
+        }
+      ]
+    }
+  ]
+}
