@@ -96,7 +96,8 @@ class APIClient {
   }
 
   async logout() {
-    return this.client.post('/auth/logout');
+    const refreshToken = localStorage.getItem('refreshToken');
+    return this.client.post('/auth/logout', { refreshToken });
   }
 
   // Mensajes

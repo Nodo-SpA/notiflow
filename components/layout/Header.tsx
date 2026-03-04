@@ -105,12 +105,15 @@ export const Header: React.FC = () => {
     loadSchool();
   }, [user?.schoolId]);
 
-  const handleLogout = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('authToken');
+  const handleLogout = async () => {
+    try {
+      await apiClient.logout();
+    } catch {
+      // Aunque falle la revocación remota, limpiamos la sesión local.
+    } finally {
+      logout();
+      router.push('/login');
     }
-    logout();
-    router.push('/login');
   };
 
   return (

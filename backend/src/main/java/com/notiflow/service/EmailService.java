@@ -151,8 +151,13 @@ public class EmailService {
         return base + (base.endsWith("/") ? "" : "/") + "forgot-password?token=" + token;
     }
 
-    public boolean sendWelcomeEmail(String to, String name, String token) {
+    public boolean sendWelcomeEmail(String to, String name, String token, Instant expiresAt) {
         String link = buildResetLink(token);
+        String humanExpiration = expiresAt == null
+                ? "24 horas"
+                : DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+                    .withZone(ZoneId.systemDefault())
+                    .format(expiresAt);
         String text = """
                 Hola %s,
 
@@ -160,8 +165,13 @@ public class EmailService {
                 Para establecer tu contraseña, usa este enlace:
                 %s
 
+                Este enlace dura hasta: %s
+
+                Si el enlace caduca, puedes crear tu contraseña desde:
+                https://www.notiflow.cl/forgot-password/
+
                 Si no reconoces este correo, ignora este mensaje.
-                """.formatted(name != null ? name : "usuario", link);
+                """.formatted(name != null ? name : "usuario", link, humanExpiration);
 
         return sendPlainEmail(to, "Bienvenido a Notiflow - establece tu contraseña", text);
     }

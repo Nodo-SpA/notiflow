@@ -145,7 +145,7 @@ public class UserService {
         try {
             if (emailService.isEnabled()) {
                 PasswordResetResult pr = passwordResetService.createResetToken(saved.getEmail(), false);
-                emailService.sendWelcomeEmail(saved.getEmail(), saved.getName(), pr.token());
+                emailService.sendWelcomeEmail(saved.getEmail(), saved.getName(), pr.token(), pr.expiresAt());
             }
         } catch (Exception e) {
             org.slf4j.LoggerFactory.getLogger(UserService.class)

@@ -10,7 +10,8 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace('/login');
+    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
+    router.replace(token ? '/dashboard' : '/login');
   }, [router]);
 
   return (
@@ -21,13 +22,13 @@ export default function Home() {
         </div>
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Notiflow</h1>
-          <p className="text-sm text-gray-600">Redirigiendo al login...</p>
+          <p className="text-sm text-gray-600">Validando sesión...</p>
         </div>
         <Link
-          href="/login"
+          href="/dashboard"
           className="inline-flex items-center justify-center gap-2 bg-primary text-white px-4 py-2 rounded-lg font-medium hover:bg-primary-dark transition-colors"
         >
-          Ir al login
+          Ir a la plataforma
         </Link>
       </div>
     </div>

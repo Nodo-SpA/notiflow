@@ -12,6 +12,7 @@ import com.notiflow.dto.StudentListResponse;
 import com.notiflow.dto.StudentRequest;
 import com.notiflow.dto.GuardianContact;
 import com.notiflow.model.StudentDocument;
+import com.notiflow.util.SearchUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -354,31 +355,24 @@ public class StudentService {
                 s.getFirstName() == null ? "" : s.getFirstName(),
                 s.getLastNameFather() == null ? "" : s.getLastNameFather(),
                 s.getLastNameMother() == null ? "" : s.getLastNameMother()
-        ).toLowerCase();
-        String email = s.getEmail() == null ? "" : s.getEmail().toLowerCase();
-        String course = s.getCourse() == null ? "" : s.getCourse().toLowerCase();
-        String run = s.getRun() == null ? "" : s.getRun().toLowerCase();
-        String commune = s.getCommune() == null ? "" : s.getCommune().toLowerCase();
-        String address = s.getAddress() == null ? "" : s.getAddress().toLowerCase();
+        );
+        String email = s.getEmail() == null ? "" : s.getEmail();
+        String course = s.getCourse() == null ? "" : s.getCourse();
+        String run = s.getRun() == null ? "" : s.getRun();
+        String commune = s.getCommune() == null ? "" : s.getCommune();
+        String address = s.getAddress() == null ? "" : s.getAddress();
         String guardianName = String.join(" ",
                 s.getGuardianFirstName() == null ? "" : s.getGuardianFirstName(),
                 s.getGuardianLastName() == null ? "" : s.getGuardianLastName()
-        ).toLowerCase();
+        );
         String guardiansConcat = "";
         if (s.getGuardians() != null) {
             guardiansConcat = s.getGuardians().stream()
-                    .map(g -> (g.getName() == null ? "" : g.getName()).toLowerCase() + " " + (g.getEmail() == null ? "" : g.getEmail().toLowerCase()))
+                    .map(g -> (g.getName() == null ? "" : g.getName()) + " " + (g.getEmail() == null ? "" : g.getEmail()))
                     .collect(Collectors.joining(" "));
         }
 
-        return fullName.contains(q)
-                || guardianName.contains(q)
-                || guardiansConcat.contains(q)
-                || email.contains(q)
-                || course.contains(q)
-                || run.contains(q)
-                || commune.contains(q)
-                || address.contains(q);
+        return SearchUtils.matchesQuery(q, fullName, guardianName, guardiansConcat, email, course, run, commune, address);
     }
 
     private long count(Query q) throws ExecutionException, InterruptedException {

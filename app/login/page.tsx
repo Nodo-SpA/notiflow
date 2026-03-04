@@ -29,6 +29,13 @@ export default function LoginPage() {
     return () => clearInterval(timer);
   }, [resendIn]);
 
+  useEffect(() => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
+    if (token) {
+      router.replace('/dashboard');
+    }
+  }, [router]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (step === 'credentials' && (!email || !password)) return;

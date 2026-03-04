@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { Modal } from '@/components/ui';
 import { apiClient } from '@/lib/api-client';
+import { sortGroupsByName } from '@/lib/group-sort';
+import { matchesSearchQuery } from '@/lib/search-utils';
 import { useAuthStore, useYearStore } from '@/store';
 
 type UserItem = {
@@ -23,6 +25,7 @@ type GroupItem = {
   description?: string;
   memberIds: string[];
   schoolId: string;
+  systemType?: string | null;
 };
 
 type SchoolItem = {
@@ -78,16 +81,16 @@ const memberKeyVariants = (value?: string | number): string[] => {
 
 export default function GroupsPage() {
   const user = useAuthStore((state) => state.user);
-  const hasPermission = useAuthStore((state) => state.hasPermission);
+  const canCreateGroups = useAuthStore((state) => state.hasPermission('groups.create'));
+  const canUpdateGroups = useAuthStore((state) => state.hasPermission('groups.update'));
+  const canDeleteGroups = useAuthStore((state) => state.hasPermission('groups.delete'));
   const role = (user?.role || '').toUpperCase();
   const { year } = useYearStore();
   const currentYear = new Date().getFullYear().toString();
   const effectiveYear = year || currentYear;
   // Acceso sólo si puede crear/editar/borrar grupos (listar por sí solo no muestra la sección)
   const canManageGroups =
-    hasPermission('groups.create') ||
-    hasPermission('groups.update') ||
-    hasPermission('groups.delete');
+    canCreateGroups || canUpdateGroups || canDeleteGroups;
   const isGlobalAdmin = (user?.schoolId || '').toLowerCase() === 'global';
   const canRebuildGroups = role === 'SUPERADMIN' || role === 'ADMIN';
   const router = useRouter();
@@ -95,6 +98,7 @@ export default function GroupsPage() {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [originalMemberIds, setOriginalMemberIds] = useState<string[]>([]);
+  const [editingSystemType, setEditingSystemType] = useState<string | null>(null);
   const [schools, setSchools] = useState<SchoolItem[]>([]);
   const [groupForm, setGroupForm] = useState({
     name: '',
@@ -276,16 +280,10 @@ export default function GroupsPage() {
         })),
   ];
     if (!searchUser.trim()) return combined;
-    const term = searchUser.toLowerCase();
-    return combined.filter(
-      (u) =>
-        u.name?.toLowerCase().includes(term) ||
-        u.email?.toLowerCase().includes(term) ||
-        u.role?.toLowerCase().includes(term)
-    );
+    return combined.filter((u) => matchesSearchQuery(searchUser, u.name, u.email, u.role));
   }, [searchUser, users, students, user?.schoolId, isGlobalAdmin, groupForm.schoolId]);
 
-  const memberLookup = useMemo(() => {
+  const userMemberLookup = useMemo(() => {
     const map = new Map<string, { label: string; detail?: string }>();
     const addLookup = (key: string | undefined, value: { label: string; detail?: string }) => {
       memberKeyVariants(key).forEach((variant) => map.set(variant, value));
@@ -296,6 +294,14 @@ export default function GroupsPage() {
       addLookup(u.id, { label: name, detail: u.email });
       addLookup(u.email, { label: name, detail: u.email });
     });
+    return map;
+  }, [users]);
+
+  const memberLookup = useMemo(() => {
+    const map = new Map(userMemberLookup);
+    const addLookup = (key: string | undefined, value: { label: string; detail?: string }) => {
+      memberKeyVariants(key).forEach((variant) => map.set(variant, value));
+    };
     const allStudents = [...students, ...lookupStudents];
     allStudents.forEach((s) => {
       const fullName = `${s.firstName || ''} ${s.lastNameFather || ''} ${s.lastNameMother || ''}`.trim();
@@ -312,13 +318,14 @@ export default function GroupsPage() {
       });
     });
     return map;
-  }, [users, students, lookupStudents]);
+  }, [userMemberLookup, students, lookupStudents]);
 
   const selectedMemberLabels = useMemo(() => {
     const unique = Array.from(new Set(groupForm.memberIds || []));
+    const preferUsersOnly = (editingSystemType || '').toUpperCase() === 'STAFF';
     const resolveLookup = (key: string) => {
       for (const variant of memberKeyVariants(key)) {
-        const found = memberLookup.get(variant);
+        const found = (preferUsersOnly ? userMemberLookup : memberLookup).get(variant);
         if (found) return found;
       }
       return undefined;
@@ -328,7 +335,7 @@ export default function GroupsPage() {
       label: resolveLookup(id)?.label || id,
       detail: resolveLookup(id)?.detail,
     }));
-  }, [groupForm.memberIds, memberLookup]);
+  }, [groupForm.memberIds, memberLookup, userMemberLookup, editingSystemType]);
 
   const candidateUsers = useMemo(() => {
     const selected = new Set((groupForm.memberIds || []).flatMap((id) => memberKeyVariants(id)));
@@ -384,7 +391,7 @@ export default function GroupsPage() {
       );
       const data = res.data || {};
       const items = data.items ?? data ?? [];
-      setGroups(items);
+      setGroups(sortGroupsByName(items));
       setTotal(data.total ?? items.length ?? 0);
       setHasMore(data.hasMore ?? false);
     } catch (err: any) {
@@ -451,6 +458,7 @@ export default function GroupsPage() {
         schoolId: isGlobalAdmin ? '' : schoolId,
       });
       setEditingId(null);
+      setEditingSystemType(null);
       await loadGroups();
     } catch (err: any) {
       const msg =
@@ -466,6 +474,7 @@ export default function GroupsPage() {
 
   const startEdit = (g: GroupItem) => {
     setEditingId(g.id);
+    setEditingSystemType(g.systemType || null);
     setShowAllMembers(false);
     setShowAllCandidates(false);
     setOriginalMemberIds(g.memberIds || []);
@@ -479,6 +488,7 @@ export default function GroupsPage() {
 
   const cancelEdit = () => {
     setEditingId(null);
+    setEditingSystemType(null);
     setShowAllMembers(false);
     setShowAllCandidates(false);
     setOriginalMemberIds([]);

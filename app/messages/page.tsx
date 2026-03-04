@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { Modal } from '@/components/ui';
 import { apiClient } from '@/lib/api-client';
+import { matchesSearchQuery } from '@/lib/search-utils';
 import { useAuthStore, useYearStore } from '@/store';
 import { notiflowLogoBase64, badgeLogoBase64 } from '@/lib/logo-base64';
 
@@ -139,11 +140,11 @@ const statusIcon = (status?: string) => {
 
 export default function MessagesPage() {
   const { year } = useYearStore();
-  const hasPermission = useAuthStore((state) => state.hasPermission);
   const currentUser = useAuthStore((state) => state.user);
+  const canListPermission = useAuthStore((state) => state.hasPermission('messages.list'));
+  const canCreate = useAuthStore((state) => state.hasPermission('messages.create'));
   const isTeacher = (currentUser?.role || '').toLowerCase() === 'teacher';
-  const canList = isTeacher || hasPermission('messages.list');
-  const canCreate = hasPermission('messages.create');
+  const canList = isTeacher || canListPermission;
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -1100,14 +1101,9 @@ export default function MessagesPage() {
                           <th className="px-3 py-2 text-left">Acciones</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-100">
+                        <tbody className="divide-y divide-gray-100">
                         {(selectedMessage.recipients || [])
-                          .filter((r) =>
-                            recipientFilter
-                              ? r.toLowerCase().includes(recipientFilter.toLowerCase()) ||
-                                recipientDisplayName(r).toLowerCase().includes(recipientFilter.toLowerCase())
-                              : true
-                          )
+                          .filter((r) => matchesSearchQuery(recipientFilter, r, recipientDisplayName(r)))
                           .map((r) => {
                           const name = recipientDisplayName(r);
                           const hasEmail = Array.isArray(selectedMessage.channels) && selectedMessage.channels.includes('email');

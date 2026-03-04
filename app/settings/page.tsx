@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { apiClient } from '@/lib/api-client';
+import { matchesSearchQuery } from '@/lib/search-utils';
 import { useAuthStore } from '@/store';
 import { FiUsers, FiDatabase, FiCpu, FiUpload, FiHome, FiChevronRight } from 'react-icons/fi';
 import { Modal } from '@/components/ui';
@@ -27,17 +28,14 @@ type SchoolItem = {
 
 export default function SettingsPage() {
   const user = useAuthStore((state) => state.user);
-  const hasPermission = useAuthStore((state) => state.hasPermission);
+  const canCreateUsers = useAuthStore((state) => state.hasPermission('users.create'));
+  const canDeleteUsers = useAuthStore((state) => state.hasPermission('users.delete'));
+  const canUpdateUsers = useAuthStore((state) => state.hasPermission('users.update'));
+  const canManageSchools = useAuthStore((state) => state.hasPermission('schools.manage'));
   const canManageUsers =
-    hasPermission('users.create') ||
-    hasPermission('users.delete') ||
-    hasPermission('users.update');
-  const canUpdateUsers = hasPermission('users.update');
-  const canManageSchools = hasPermission('schools.manage');
+    canCreateUsers || canDeleteUsers || canUpdateUsers;
   const canManageAi = canManageSchools;
   const canAccessSettings = canManageUsers || canManageSchools;
-  const canDeleteUsers = hasPermission('users.delete');
-  const canCreateUsers = hasPermission('users.create');
   const isGlobalAdmin = (user?.schoolId || '').toLowerCase() === 'global';
   const canImportStudents = isGlobalAdmin;
 
@@ -205,13 +203,9 @@ Información sensible no académica`;
         if (page > 50) break;
       }
       if (query && query.trim()) {
-        const term = query.toLowerCase();
         setUsers(
           all.filter(
-            (u) =>
-              (u.name || '').toLowerCase().includes(term) ||
-              (u.email || '').toLowerCase().includes(term) ||
-              (u.role || '').toLowerCase().includes(term)
+            (u) => matchesSearchQuery(query, u.name, u.email, u.role, u.schoolName, u.rut)
           )
         );
       } else {
@@ -521,15 +515,7 @@ Información sensible no académica`;
 
   const filteredUsers = useMemo(() => {
     if (!userSearch.trim()) return users;
-    const term = userSearch.toLowerCase();
-    return users.filter(
-      (u) =>
-        u.name?.toLowerCase().includes(term) ||
-        u.email?.toLowerCase().includes(term) ||
-        u.role?.toLowerCase().includes(term) ||
-        u.schoolName?.toLowerCase().includes(term) ||
-        u.rut?.toLowerCase().includes(term)
-    );
+    return users.filter((u) => matchesSearchQuery(userSearch, u.name, u.email, u.role, u.schoolName, u.rut));
   }, [userSearch, users]);
   const userTotalPages = Math.max(1, Math.ceil(filteredUsers.length / userPageSize));
   const paginatedUsers = useMemo(() => {

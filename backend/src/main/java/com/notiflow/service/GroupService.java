@@ -12,6 +12,7 @@ import com.notiflow.dto.GroupDto;
 import com.notiflow.dto.GroupListResponse;
 import com.notiflow.dto.GroupRequest;
 import com.notiflow.model.GroupDocument;
+import com.notiflow.util.SearchUtils;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -35,6 +36,7 @@ public class GroupService {
     private static final int MAX_SEARCH_SCAN = 5000;
     public static final String SYSTEM_ALL_STUDENTS = "ALL_STUDENTS";
     public static final String SYSTEM_ALL_COMMUNITY = "ALL_COMMUNITY";
+    public static final String SYSTEM_STAFF = "STAFF";
 
     public GroupService(Firestore firestore, StudentService studentService, UserService userService) {
         this.firestore = firestore;
@@ -67,6 +69,7 @@ public class GroupService {
     public int rebuildCourseGroups(String schoolId, String year) {
         if (schoolId == null || schoolId.isBlank()) return 0;
         String resolvedYear = (year == null || year.isBlank()) ? String.valueOf(Year.now().getValue()) : year;
+        ensureDefaultGroups(schoolId, resolvedYear);
         List<com.notiflow.model.StudentDocument> students = studentService.listAllBySchoolAndYear(schoolId, resolvedYear);
         java.util.Map<String, java.util.Set<String>> byCourse = new java.util.HashMap<>();
 
@@ -156,11 +159,7 @@ public class GroupService {
     }
 
     private boolean matchesQuery(GroupDto g, String q) {
-        String name = g.name() == null ? "" : g.name().toLowerCase();
-        String description = g.description() == null ? "" : g.description().toLowerCase();
-        String school = g.schoolId() == null ? "" : g.schoolId().toLowerCase();
-        String year = g.year() == null ? "" : g.year().toLowerCase();
-        return name.contains(q) || description.contains(q) || school.contains(q) || year.contains(q);
+        return SearchUtils.matchesQuery(q, g.name(), g.description(), g.schoolId(), g.year());
     }
 
     private com.google.cloud.firestore.Query applyOrderSafely(com.google.cloud.firestore.Query base) {
@@ -397,6 +396,16 @@ public class GroupService {
                 schoolId,
                 resolvedYear,
                 SYSTEM_ALL_COMMUNITY
+        ));
+
+        created.add(upsertSystemGroup(
+                systemId(SYSTEM_STAFF, resolvedYear),
+                "Funcionarios",
+                "Todos los usuarios internos del establecimiento",
+                userRecipients,
+                schoolId,
+                resolvedYear,
+                SYSTEM_STAFF
         ));
 
         return created.stream().filter(Objects::nonNull).toList();

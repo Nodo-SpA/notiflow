@@ -6,6 +6,8 @@ import clsx from 'clsx';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { Modal } from '@/components/ui';
 import { apiClient } from '@/lib/api-client';
+import { sortGroupsByName } from '@/lib/group-sort';
+import { matchesSearchQuery } from '@/lib/search-utils';
 import { useAuthStore, useYearStore } from '@/store';
 
 const renderRich = (text?: string) => {
@@ -60,9 +62,8 @@ type StudentRecipient = {
 
 export default function NewMessagePage() {
   const { year } = useYearStore();
-  const hasPermission = useAuthStore((state) => state.hasPermission);
+  const canCreate = useAuthStore((state) => state.hasPermission('messages.create'));
   const currentUser = useAuthStore((state) => state.user);
-  const canCreate = hasPermission('messages.create');
   const isTeacher = (currentUser?.role || '').toLowerCase() === 'teacher';
   const [templates, setTemplates] = useState<Template[]>([]);
   const [recentTemplates, setRecentTemplates] = useState<Template[]>([]);
@@ -100,7 +101,7 @@ export default function NewMessagePage() {
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [studentsError, setStudentsError] = useState('');
   const [studentCache, setStudentCache] = useState<Record<string, StudentRecipient>>({});
-  const [groups, setGroups] = useState<{ id: string; name: string; memberIds: string[]; year?: string }[]>([]);
+  const [groups, setGroups] = useState<{ id: string; name: string; memberIds: string[]; year?: string; systemType?: string | null }[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [groupsError, setGroupsError] = useState('');
   const [allowedGroupIds, setAllowedGroupIds] = useState<string[] | null>(null);
@@ -189,7 +190,7 @@ export default function NewMessagePage() {
       setLoadingGroups(true);
       setGroupsError('');
       try {
-        const all: { id: string; name: string; memberIds: string[]; year?: string }[] = [];
+        const all: { id: string; name: string; memberIds: string[]; year?: string; systemType?: string | null }[] = [];
         const pageSize = 100;
         let page = 1;
         while (true) {
@@ -203,7 +204,7 @@ export default function NewMessagePage() {
           page += 1;
           if (page > 50) break;
         }
-        setGroups(all);
+        setGroups(sortGroupsByName(all));
       } catch (err: any) {
         const msg =
           err?.response?.data?.message ||
@@ -789,13 +790,16 @@ export default function NewMessagePage() {
 
     const studentMembersSet = new Set<string>();
     const userMembersSet = new Set<string>();
+    const staffOnlyGroup = (group.systemType || '').toUpperCase() === 'STAFF';
     memberIds.forEach((member) => {
       const raw = (member || '').trim();
       if (!raw) return;
       if (raw.includes('@')) {
         const emailKey = raw.toLowerCase();
         usersByEmail.get(emailKey)?.forEach((uid) => userMembersSet.add(uid));
-        studentsByEmail.get(emailKey)?.forEach((sid) => studentMembersSet.add(sid));
+        if (!staffOnlyGroup) {
+          studentsByEmail.get(emailKey)?.forEach((sid) => studentMembersSet.add(sid));
+        }
         return;
       }
       idVariants(raw).forEach((variant) => {
@@ -961,11 +965,14 @@ export default function NewMessagePage() {
       if (g.name) {
         courseKeys.add(courseKey(g.name, g.year || year));
       }
+      const staffOnlyGroup = (g.systemType || '').toUpperCase() === 'STAFF';
       (g.memberIds || []).forEach((m) => {
         const raw = (m || '').trim();
         if (!raw) return;
         if (raw.includes('@')) {
-          emails.add(raw.toLowerCase());
+          if (!staffOnlyGroup) {
+            emails.add(raw.toLowerCase());
+          }
         } else {
           const resolved = memberIdVariants(raw)
             .map((v) => studentIdLookup.get(v))
@@ -981,18 +988,12 @@ export default function NewMessagePage() {
 
   const filteredUsers = useMemo(() => {
     if (!search.trim()) return users;
-    const term = search.toLowerCase();
-    return users.filter(
-      (u) =>
-        u.name?.toLowerCase().includes(term) ||
-        u.email?.toLowerCase().includes(term)
-    );
+    return users.filter((u) => matchesSearchQuery(search, u.name, u.email));
   }, [search, users]);
 
   const filteredGroups = useMemo(() => {
     if (!groupSearch.trim()) return availableGroups;
-    const term = groupSearch.toLowerCase();
-    return availableGroups.filter((g) => g.name?.toLowerCase().includes(term));
+    return availableGroups.filter((g) => matchesSearchQuery(groupSearch, g.name));
   }, [groupSearch, availableGroups]);
 
   useEffect(() => {
@@ -1058,16 +1059,11 @@ export default function NewMessagePage() {
     const term = debouncedStudentSearch?.toLowerCase() || '';
     if (!term) return base;
     return base.filter((s) => {
-      const name = `${s.firstName || ''} ${s.lastNameFather || ''} ${s.lastNameMother || ''}`.toLowerCase();
-      const email = (s.email || '').toLowerCase();
-      const guardians = guardianEmailsOf(s).join(' ').toLowerCase();
-      const course = (s.course || '').toLowerCase();
-      return (
-        name.includes(term) ||
-        email.includes(term) ||
-        guardians.includes(term) ||
-        course.includes(term)
-      );
+      const name = `${s.firstName || ''} ${s.lastNameFather || ''} ${s.lastNameMother || ''}`;
+      const email = s.email || '';
+      const guardians = guardianEmailsOf(s).join(' ');
+      const course = s.course || '';
+      return matchesSearchQuery(term, name, email, guardians, course);
     });
   }, [isTeacher, teacherStudents, teacherAllowedSets, debouncedStudentSearch, allowedGroupIds]);
 
@@ -1117,12 +1113,8 @@ export default function NewMessagePage() {
   const [recipientSearch, setRecipientSearch] = useState('');
   const filteredSelectedRecipients = useMemo(() => {
     if (!recipientSearch.trim()) return allSelectedRecipients;
-    const term = recipientSearch.toLowerCase();
     return allSelectedRecipients.filter(
-      (r) =>
-        (r.label && r.label.toLowerCase().includes(term)) ||
-        (r.email && r.email.toLowerCase().includes(term)) ||
-        (r.type && r.type.toLowerCase().includes(term))
+      (r) => matchesSearchQuery(recipientSearch, r.label, r.email, r.type)
     );
   }, [recipientSearch, allSelectedRecipients]);
 

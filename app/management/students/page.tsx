@@ -27,15 +27,13 @@ type StudentItem = {
 
 export default function StudentsPage() {
   const user = useAuthStore((state) => state.user);
-  const hasPermission = useAuthStore((state) => state.hasPermission);
+  const canCreateStudents = useAuthStore((state) => state.hasPermission('students.create'));
+  const canUpdateStudents = useAuthStore((state) => state.hasPermission('students.update'));
+  const canDeleteStudentsPermission = useAuthStore((state) => state.hasPermission('students.delete'));
   const role = (user?.role || '').toUpperCase();
   const { year } = useYearStore();
   const canManageStudents =
-    hasPermission('students.create') ||
-    hasPermission('students.update') ||
-    hasPermission('students.delete');
-  const canCreateStudents = hasPermission('students.create');
-  const canUpdateStudents = hasPermission('students.update');
+    canCreateStudents || canUpdateStudents || canDeleteStudentsPermission;
   const canDeleteStudents = role === 'SUPERADMIN' || role === 'ADMIN';
   const isGlobalAdmin = (user?.schoolId || '').toLowerCase() === 'global';
   const [query, setQuery] = useState('');

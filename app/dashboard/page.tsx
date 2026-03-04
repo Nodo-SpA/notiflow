@@ -8,28 +8,60 @@ import { apiClient } from '@/lib/api-client';
 import { useAuthStore, useYearStore } from '@/store';
 import { FiSend, FiBarChart, FiBookOpen } from 'react-icons/fi';
 
-type MessageItem = { id: string; content: string; senderName: string; createdAt?: string; status?: string; recipients?: string[]; schoolId?: string };
+type MessageItem = {
+  id: string;
+  content: string;
+  senderName: string;
+  createdAt?: string;
+  status?: string;
+  recipients?: string[];
+  schoolId?: string;
+  channels?: string[];
+  emailStatus?: string;
+  appStatus?: string;
+  emailStatuses?: Record<string, string>;
+  appStatuses?: Record<string, string>;
+};
 type UserItem = { id: string; role: string; schoolId?: string; schoolName?: string };
 type SchoolItem = { id: string; name: string };
+
+const statusValues = (perRecipient?: Record<string, string>, fallback?: string) => {
+  const values = Object.values(perRecipient || {}).filter(Boolean);
+  if (values.length > 0) return values;
+  return fallback ? [fallback] : [];
+};
+
+const countMessageDeliveries = (message: MessageItem) => {
+  const email = statusValues(message.emailStatuses, message.emailStatus)
+    .filter((status) => ['sent', 'delivered', 'read', 'opened'].includes((status || '').toLowerCase()))
+    .length;
+  const app = statusValues(message.appStatuses, message.appStatus)
+    .filter((status) => ['sent', 'delivered', 'read'].includes((status || '').toLowerCase()))
+    .length;
+  return { email, app, total: email + app };
+};
 
 export default function DashboardPage() {
   const { year } = useYearStore();
   // Siempre trabajamos con el año calendario actual cuando no hay uno seleccionado explícitamente
   const currentYear = new Date().getFullYear().toString();
   const effectiveYear = year || currentYear;
-  const hasPermission = useAuthStore((state) => state.hasPermission);
   const currentUser = useAuthStore((state) => state.user);
+  const canCreateMessage = useAuthStore((state) => state.hasPermission('messages.create'));
+  const canListMessagesPermission = useAuthStore((state) => state.hasPermission('messages.list'));
+  const canSeeReports = useAuthStore((state) => state.hasPermission('reports.view'));
+  const canSeeUsers = useAuthStore((state) => state.hasPermission('users.list'));
+  const canListStudents = useAuthStore((state) => state.hasPermission('students.list'));
+  const canCreateStudents = useAuthStore((state) => state.hasPermission('students.create'));
+  const canUpdateStudents = useAuthStore((state) => state.hasPermission('students.update'));
+  const canDeleteStudents = useAuthStore((state) => state.hasPermission('students.delete'));
+  const isWildcard = useAuthStore((state) => state.hasPermission('*'));
   const isTeacher = (currentUser?.role || '').toLowerCase() === 'teacher';
-  const canCreateMessage = hasPermission('messages.create');
-  const canSeeMessages = isTeacher || hasPermission('messages.list');
-  const canSeeReports = hasPermission('reports.view');
-  const canSeeUsers = !isTeacher && hasPermission('users.list');
+  const canSeeMessages = isTeacher || canListMessagesPermission;
+  const canSeeUsersPanel = !isTeacher && canSeeUsers;
   const canSeeStudents =
-    hasPermission('students.list') ||
-    hasPermission('students.create') ||
-    hasPermission('students.update') ||
-    hasPermission('students.delete');
-  const isSuperAdmin = (currentUser?.role || '').toLowerCase() === 'superadmin' || hasPermission('*');
+    canListStudents || canCreateStudents || canUpdateStudents || canDeleteStudents;
+  const isSuperAdmin = (currentUser?.role || '').toLowerCase() === 'superadmin' || isWildcard;
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [messageTotal, setMessageTotal] = useState(0);
   const [users, setUsers] = useState<UserItem[]>([]);
@@ -77,7 +109,7 @@ export default function DashboardPage() {
           return all;
         };
         const msgPromise = fetchAllMessages();
-        const usrPromise = canSeeUsers ? fetchAllUsers() : Promise.resolve([]);
+        const usrPromise = canSeeUsersPanel ? fetchAllUsers() : Promise.resolve([]);
         const studentPromise = canSeeStudents
           ? apiClient.getStudents({ page: 1, pageSize: 1, year: effectiveYear })
           : Promise.resolve({ data: { items: [], total: 0 } });
@@ -92,7 +124,7 @@ export default function DashboardPage() {
         ]);
         const msgItems = (msgRes as MessageItem[]) || [];
         setMessages(msgItems);
-        setMessageTotal(msgItems.length);
+        setMessageTotal(msgItems.reduce((sum, message) => sum + countMessageDeliveries(message).total, 0));
         setUsers((usrRes as UserItem[]) || []);
         const studentData = studentRes.data || {};
         const studentTotal = studentData.total ?? studentData.items?.length ?? 0;
@@ -107,15 +139,15 @@ export default function DashboardPage() {
       }
     };
     load();
-  }, [effectiveYear, canSeeUsers, isSuperAdmin]);
+  }, [effectiveYear, canSeeUsersPanel, isSuperAdmin]);
 
   const stats = useMemo(
     () => {
-      const base = [{ label: `Mensajes ${effectiveYear}`, value: messageTotal }];
+      const base = [{ label: `Mensajes enviados ${effectiveYear}`, value: messageTotal }];
       if (canSeeStudents) {
         base.push({ label: `Estudiantes ${effectiveYear}`, value: studentCount });
       }
-      if (canSeeUsers) {
+      if (canSeeUsersPanel) {
         base.push({ label: 'Usuarios', value: users.length });
         base.push({
           label: 'Admins',
@@ -124,7 +156,7 @@ export default function DashboardPage() {
       }
       return base;
     },
-    [messageTotal, users, canSeeUsers, canSeeStudents, studentCount, effectiveYear]
+    [messageTotal, users, canSeeUsersPanel, canSeeStudents, studentCount, effectiveYear]
   );
 
   const schoolBreakdown = useMemo(() => {
@@ -143,7 +175,7 @@ export default function DashboardPage() {
     });
     messages.forEach((m) => {
       const id = m.schoolId || 'desconocido';
-      messageCount.set(id, (messageCount.get(id) || 0) + 1);
+      messageCount.set(id, (messageCount.get(id) || 0) + countMessageDeliveries(m).total);
     });
     Object.entries(appActiveBySchool || {}).forEach(([id, count]) => {
       appActiveCount.set(id, (appActiveCount.get(id) || 0) + Number(count));
@@ -291,7 +323,7 @@ export default function DashboardPage() {
                       <span className="font-bold">{loading ? '—' : s.admins}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Mensajes {effectiveYear}</span>
+                      <span>Mensajes enviados {effectiveYear}</span>
                       <span className="font-bold">{loading ? '—' : s.messages}</span>
                     </div>
                     <div className="flex justify-between">

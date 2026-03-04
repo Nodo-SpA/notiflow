@@ -30,7 +30,7 @@ app:
     password: ${APP_ADMIN_PASSWORD:}
     school-id: ${APP_ADMIN_SCHOOL_ID:global}
   password-reset:
-    expires-minutes: 30
+    expires-minutes: 1440
   frontend-url: ${APP_FRONTEND_URL:https://hectorguzman.github.io/notiflow}
   mail:
     from: ${APP_MAIL_FROM:no-reply@notiflow.local}

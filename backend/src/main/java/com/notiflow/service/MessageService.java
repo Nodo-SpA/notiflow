@@ -23,6 +23,7 @@ import com.notiflow.model.MessageStatus;
 import com.notiflow.model.StudentDocument;
 import com.notiflow.service.SchoolService;
 import com.notiflow.util.CurrentUser;
+import com.notiflow.util.SearchUtils;
 import com.notiflow.model.UserDocument;
 import com.notiflow.model.UserRole;
 import org.springframework.stereotype.Service;
@@ -218,12 +219,8 @@ public class MessageService {
     }
 
     private boolean matchesQuery(MessageDto dto, String q) {
-        String content = dto.content() == null ? "" : dto.content().toLowerCase();
-        String senderName = dto.senderName() == null ? "" : dto.senderName().toLowerCase();
-        String senderEmail = dto.senderEmail() == null ? "" : dto.senderEmail().toLowerCase();
-        String reason = dto.reason() == null ? "" : dto.reason().toLowerCase();
-        String recipients = dto.recipients() == null ? "" : String.join(",", dto.recipients()).toLowerCase();
-        return content.contains(q) || senderName.contains(q) || senderEmail.contains(q) || recipients.contains(q) || reason.contains(q);
+        String recipients = dto.recipients() == null ? "" : String.join(" ", dto.recipients());
+        return SearchUtils.matchesQuery(q, dto.content(), dto.senderName(), dto.senderEmail(), dto.reason(), recipients);
     }
 
     private record StudentAudienceContext(List<String> audienceKeys, List<String> groupIds, String studentId) {}
@@ -417,6 +414,7 @@ public class MessageService {
             senderName = resolveSenderName(senderName, senderId);
             String allStudentsGroupId = groupService.systemId(GroupService.SYSTEM_ALL_STUDENTS, resolvedYear);
             String allCommunityGroupId = groupService.systemId(GroupService.SYSTEM_ALL_COMMUNITY, resolvedYear);
+            String staffGroupId = groupService.systemId(GroupService.SYSTEM_STAFF, resolvedYear);
 
             // Restricción por profesor: solo grupos permitidos
             if (current != null && "teacher".equalsIgnoreCase(current.role())) {
@@ -472,7 +470,8 @@ public class MessageService {
                             }
                             if (Boolean.TRUE.equals(g.getSystem()) &&
                                     (GroupService.SYSTEM_ALL_STUDENTS.equalsIgnoreCase(g.getSystemType())
-                                            || GroupService.SYSTEM_ALL_COMMUNITY.equalsIgnoreCase(g.getSystemType()))) {
+                                            || GroupService.SYSTEM_ALL_COMMUNITY.equalsIgnoreCase(g.getSystemType())
+                                            || GroupService.SYSTEM_STAFF.equalsIgnoreCase(g.getSystemType()))) {
                                 broadcast = true;
                             }
                         }
@@ -499,7 +498,9 @@ public class MessageService {
             msg.setYear(resolvedYear);
             msg.setGroupIds(groupIds);
             msg.setStudentIds(studentIds);
-            if (!broadcast && (groupIds.contains(allStudentsGroupId) || groupIds.contains(allCommunityGroupId))) {
+            if (!broadcast && (groupIds.contains(allStudentsGroupId)
+                    || groupIds.contains(allCommunityGroupId)
+                    || groupIds.contains(staffGroupId))) {
                 broadcast = true;
             }
             Map<String, String> recipientNames = resolveRecipientNames(normalizedRecipients);

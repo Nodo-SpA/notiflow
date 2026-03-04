@@ -4,6 +4,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { Card, Button, Input, TextArea, Select, Modal } from '@/components/ui';
 import { apiClient } from '@/lib/api-client';
+import { sortGroupsByName } from '@/lib/group-sort';
+import { matchesSearchQuery } from '@/lib/search-utils';
 import { useAuthStore, useYearStore } from '@/store';
 import { EventItem, EventType } from '@/types';
 import {
@@ -28,11 +30,11 @@ const formatDate = (value?: string) => {
 
 export default function EventsPage() {
   const user = useAuthStore((state) => state.user);
-  const hasPermission = useAuthStore((state) => state.hasPermission);
+  const canCreateEventsPermission = useAuthStore((state) => state.hasPermission('events.create'));
   const role = (user?.role || '').toUpperCase();
   const isTeacher = role === 'TEACHER';
   const canCreate =
-    role === 'SUPERADMIN' || role === 'ADMIN' || role === 'TEACHER' || hasPermission('events.create');
+    role === 'SUPERADMIN' || role === 'ADMIN' || role === 'TEACHER' || canCreateEventsPermission;
   const today = useMemo(() => new Date(), []);
   const currentYear = today.getFullYear();
   const { year: selectedYear } = useYearStore();
@@ -67,7 +69,7 @@ export default function EventsPage() {
 
   // Recipients data
   const [users, setUsers] = useState<{ id: string; name: string; email?: string; badge?: string }[]>([]);
-  const [groups, setGroups] = useState<{ id: string; name: string; memberIds?: string[] }[]>([]);
+  const [groups, setGroups] = useState<{ id: string; name: string; memberIds?: string[]; systemType?: string | null }[]>([]);
   const [students, setStudents] = useState<{ id: string; name: string; email?: string }[]>([]);
   const [allowedGroupIds, setAllowedGroupIds] = useState<string[] | null>(null);
   const [loadingAllowedGroups, setLoadingAllowedGroups] = useState(false);
@@ -207,7 +209,7 @@ export default function EventsPage() {
         setUsers((usersRes.value || []).map((x: any) => ({ ...x, badge: 'Usuario' })));
       }
       if (groupsRes.status === 'fulfilled') {
-        setGroups(groupsRes.value || []);
+        setGroups(sortGroupsByName(groupsRes.value || []));
       }
       if (studentsRes.status === 'fulfilled') {
         setStudents(
@@ -274,10 +276,7 @@ export default function EventsPage() {
     });
     return eventsThisYear
       .filter((ev) => {
-        const matchesTerm =
-          !term ||
-          ev.title?.toLowerCase().includes(term) ||
-          ev.description?.toLowerCase().includes(term);
+        const matchesTerm = matchesSearchQuery(term, ev.title, ev.description);
         const rawType = ev.type || '';
         const normalizedType = normalizeEventType(rawType);
         const matchesType = filterType === 'all' || normalizedType === filterType;
@@ -342,11 +341,14 @@ export default function EventsPage() {
     const emails = new Set<string>();
     groups.forEach((g) => {
       if (!allowed.has(g.id)) return;
+      const staffOnlyGroup = (g.systemType || '').toUpperCase() === 'STAFF';
       (g.memberIds || []).forEach((m) => {
         const raw = (m || '').trim();
         if (!raw) return;
         if (raw.includes('@')) {
-          emails.add(raw.toLowerCase());
+          if (!staffOnlyGroup) {
+            emails.add(raw.toLowerCase());
+          }
         } else {
           ids.add(raw);
         }
@@ -383,19 +385,12 @@ export default function EventsPage() {
       })),
     ].filter((r) => r.id);
     if (!recipientSearch.trim()) return base;
-    const term = recipientSearch.toLowerCase();
-    return base.filter(
-      (r) =>
-        (r.name || '').toLowerCase().includes(term) ||
-        (r.email || '').toLowerCase().includes(term) ||
-        (r.badge || '').toLowerCase().includes(term)
-    );
+    return base.filter((r) => matchesSearchQuery(recipientSearch, r.name, r.email, r.badge));
   }, [users, availableStudents, recipientSearch]);
 
   const filteredGroups = useMemo(() => {
     if (!groupSearch.trim()) return availableGroups;
-    const term = groupSearch.toLowerCase();
-    return availableGroups.filter((g) => g.name.toLowerCase().includes(term));
+    return availableGroups.filter((g) => matchesSearchQuery(groupSearch, g.name));
   }, [availableGroups, groupSearch]);
 
   const resetForm = () => {

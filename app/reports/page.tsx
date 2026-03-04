@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { apiClient } from '@/lib/api-client';
+import { matchesSearchQuery } from '@/lib/search-utils';
 import { useAuthStore, useYearStore } from '@/store';
 
 type MessageReport = {
@@ -12,7 +13,9 @@ type MessageReport = {
   senderName: string;
   createdAt?: string;
   emailStatus?: string;
+  emailStatuses?: Record<string, string>;
   appStatus?: string;
+  appStatuses?: Record<string, string>;
 };
 type UserLight = { id: string; email?: string };
 type StudentLight = { id: string; email?: string; guardians?: { email?: string }[]; guardianEmails?: string[] };
@@ -49,11 +52,35 @@ const statusIcon = (status?: string) => {
   return '';
 };
 
+const emailStatusValues = (message: MessageReport) => {
+  const perRecipient = Object.values(message.emailStatuses || {}).filter(Boolean);
+  if (perRecipient.length > 0) {
+    return perRecipient;
+  }
+  return message.emailStatus ? [message.emailStatus] : [];
+};
+
+const appStatusValues = (message: MessageReport) => {
+  const perRecipient = Object.values(message.appStatuses || {}).filter(Boolean);
+  if (perRecipient.length > 0) {
+    return perRecipient;
+  }
+  return message.appStatus ? [message.appStatus] : [];
+};
+
+const deliveredCount = (message: MessageReport) => {
+  const email = emailStatusValues(message).filter((raw) =>
+    ['sent', 'delivered', 'read', 'opened'].includes((raw || '').toLowerCase())
+  ).length;
+  const app = appStatusValues(message).filter((raw) =>
+    ['sent', 'delivered', 'read'].includes((raw || '').toLowerCase())
+  ).length;
+  return { email, app, total: email + app };
+};
+
 export default function ReportsPage() {
   const { year } = useYearStore();
-  const hasPermission = useAuthStore((state) => state.hasPermission);
-  const canView = hasPermission('reports.view');
-  const canCreateMessage = hasPermission('messages.create');
+  const canView = useAuthStore((state) => state.hasPermission('reports.view'));
   const [messages, setMessages] = useState<MessageReport[]>([]);
   const [users, setUsers] = useState<UserLight[]>([]);
   const [students, setStudents] = useState<StudentLight[]>([]);
@@ -154,12 +181,7 @@ export default function ReportsPage() {
   }, [canView, year]);
 
   const filtered = messages.filter((m) => {
-    const term = search.toLowerCase();
-    return (
-      !term ||
-      m.content?.toLowerCase().includes(term) ||
-      m.senderName?.toLowerCase().includes(term)
-    );
+    return matchesSearchQuery(search, m.content, m.senderName);
   });
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
@@ -171,12 +193,9 @@ export default function ReportsPage() {
     if (!d || Number.isNaN(d.getTime())) return false;
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
   });
-  const total = baseMessages.length;
   const emailStatus = (m: any) => (m.emailStatus || '').toLowerCase();
   const appStatus = (m: any) => (m.appStatus || '').toLowerCase();
 
-  const sentEmail = baseMessages.filter((m) => ['sent', 'delivered'].includes(emailStatus(m))).length;
-  const failedEmail = baseMessages.filter((m) => emailStatus(m) === 'failed').length;
   const totalUsers = users.length;
   const totalStudents = students.length;
   const guardianEmailSet = useMemo(() => {
@@ -217,28 +236,55 @@ export default function ReportsPage() {
   const emailStatusCounts = (() => {
     const base = { sent: 0, failed: 0, read: 0, other: 0 };
     baseMessages.forEach((m) => {
-      const s = (m.emailStatus || '').toLowerCase();
-      if (s === 'sent' || s === 'delivered') base.sent++;
-      else if (s === 'read' || s === 'opened') base.read++;
-      else if (s === 'failed') base.failed++;
-      else base.other++;
+      const statuses = emailStatusValues(m);
+      if (statuses.length === 0) {
+        return;
+      }
+      statuses.forEach((raw) => {
+        const s = (raw || '').toLowerCase();
+        if (s === 'sent' || s === 'delivered') {
+          base.sent++;
+        } else if (s === 'read' || s === 'opened') {
+          base.sent++;
+          base.read++;
+        } else if (s === 'failed') {
+          base.failed++;
+        } else {
+          base.other++;
+        }
+      });
     });
     return base;
   })();
   const appStatusCounts = (() => {
     const base = { read: 0, pending: 0, sent: 0, other: 0 };
     baseMessages.forEach((m) => {
-      const s = (m.appStatus || '').toLowerCase();
-      if (s === 'read') base.read++;
-      else if (s === 'pending') base.pending++;
-      else if (s === 'sent' || s === 'delivered') base.sent++;
-      else base.other++;
+      const statuses = appStatusValues(m);
+      if (statuses.length === 0) {
+        return;
+      }
+      statuses.forEach((raw) => {
+        const s = (raw || '').toLowerCase();
+        if (s === 'read') {
+          base.read++;
+          base.sent++;
+        } else if (s === 'pending') {
+          base.pending++;
+        } else if (s === 'sent' || s === 'delivered') {
+          base.sent++;
+        } else {
+          base.other++;
+        }
+      });
     });
     return base;
   })();
   const appSent = appStatusCounts.sent;
   const appRead = appStatusCounts.read;
+  const sentEmail = emailStatusCounts.sent;
+  const failedEmail = emailStatusCounts.failed;
   const emailRead = emailStatusCounts.read;
+  const total = sentEmail + appSent;
   const weeklyUsage = useMemo(() => {
     const counts = [0, 0, 0, 0]; // 0: semana actual, 1: hace 1 semana, etc.
     const now = new Date();
@@ -248,7 +294,7 @@ export default function ReportsPage() {
       const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
       if (diffDays < 0 || diffDays >= 28) return; // solo últimas 4 semanas
       const bucket = Math.floor(diffDays / 7);
-      if (bucket >= 0 && bucket < 4) counts[bucket] += 1;
+      if (bucket >= 0 && bucket < 4) counts[bucket] += deliveredCount(m).total;
     });
     const labels = ['Semana actual', 'Hace 1 semana', 'Hace 2 semanas', 'Hace 3 semanas'];
     const palette = ['#0ea5e9', '#8b5cf6', '#f97316', '#10b981'];

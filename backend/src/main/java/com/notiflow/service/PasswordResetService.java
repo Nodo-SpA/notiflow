@@ -29,7 +29,7 @@ public class PasswordResetService {
             UserService userService,
             PasswordEncoder passwordEncoder,
             EmailService emailService,
-            @Value("${app.password-reset.expires-minutes:30}") long expirationMinutes
+            @Value("${app.password-reset.expires-minutes:1440}") long expirationMinutes
     ) {
         this.firestore = firestore;
         this.userService = userService;

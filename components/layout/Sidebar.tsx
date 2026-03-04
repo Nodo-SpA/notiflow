@@ -19,34 +19,38 @@ export const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const [expandedMenu, setExpandedMenu] = useState<string | null>(null);
   const user = useAuthStore((state) => state.user);
-  const hasPermission = useAuthStore((state) => state.hasPermission);
+  const canCreateMessage = useAuthStore((state) => state.hasPermission('messages.create'));
+  const canListMessages = useAuthStore((state) => state.hasPermission('messages.list'));
+  const canCreateStudents = useAuthStore((state) => state.hasPermission('students.create'));
+  const canUpdateStudents = useAuthStore((state) => state.hasPermission('students.update'));
+  const canDeleteStudents = useAuthStore((state) => state.hasPermission('students.delete'));
+  const canCreateGroups = useAuthStore((state) => state.hasPermission('groups.create'));
+  const canUpdateGroups = useAuthStore((state) => state.hasPermission('groups.update'));
+  const canDeleteGroups = useAuthStore((state) => state.hasPermission('groups.delete'));
+  const canCreateUsers = useAuthStore((state) => state.hasPermission('users.create'));
+  const canUpdateUsers = useAuthStore((state) => state.hasPermission('users.update'));
+  const canDeleteUsers = useAuthStore((state) => state.hasPermission('users.delete'));
+  const canManageSchools = useAuthStore((state) => state.hasPermission('schools.manage'));
+  const canSeeReports = useAuthStore((state) => state.hasPermission('reports.view'));
+  const canCreateEventsPermission = useAuthStore((state) => state.hasPermission('events.create'));
   const role = (user?.role || '').toUpperCase();
   const isTeacherOrViewer = role === 'TEACHER' || role === 'GUARDIAN' || role === 'STUDENT';
 
-  const canCreateMessage = hasPermission('messages.create');
-  const canListMessages = hasPermission('messages.list');
   const canManageStudents =
-    hasPermission('students.create') ||
-    hasPermission('students.update') ||
-    hasPermission('students.delete');
+    canCreateStudents || canUpdateStudents || canDeleteStudents;
   // Solo mostramos gestión si puede crear/editar/borrar grupos (no solo listarlos)
   const canManageGroups =
-    hasPermission('groups.create') ||
-    hasPermission('groups.update') ||
-    hasPermission('groups.delete');
+    canCreateGroups || canUpdateGroups || canDeleteGroups;
   const canSeeManagement = !isTeacherOrViewer && (canManageStudents || canManageGroups);
-  const canManageTeacherPerms = !isTeacherOrViewer && (hasPermission('users.create') || hasPermission('users.update'));
-  const canSeeReports = hasPermission('reports.view');
+  const canManageTeacherPerms = !isTeacherOrViewer && (canCreateUsers || canUpdateUsers);
   const canSeeSettings =
     !isTeacherOrViewer &&
-    (hasPermission('users.create') ||
-      hasPermission('users.delete') ||
-      hasPermission('schools.manage'));
+    (canCreateUsers || canDeleteUsers || canManageSchools);
   const canCreateEvents =
     role === 'SUPERADMIN' ||
     role === 'ADMIN' ||
     role === 'TEACHER' ||
-    hasPermission('events.create');
+    canCreateEventsPermission;
 
   const menuItems = useMemo(
     () => [

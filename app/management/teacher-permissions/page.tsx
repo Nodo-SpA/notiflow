@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ProtectedLayout } from '@/components/layout/ProtectedLayout';
 import { apiClient } from '@/lib/api-client';
+import { sortGroupsByName } from '@/lib/group-sort';
+import { matchesSearchQuery } from '@/lib/search-utils';
 import { useAuthStore } from '@/store';
 
 type Teacher = { id: string; name?: string; email: string; role?: string };
@@ -12,8 +14,9 @@ type Permission = { email: string; allowedGroupIds: string[] };
 
 export default function TeacherPermissionsPage() {
   const user = useAuthStore((state) => state.user);
-  const hasPermission = useAuthStore((state) => state.hasPermission);
-  const canManage = hasPermission('users.create') || hasPermission('users.update');
+  const canCreateUsers = useAuthStore((state) => state.hasPermission('users.create'));
+  const canUpdateUsers = useAuthStore((state) => state.hasPermission('users.update'));
+  const canManage = canCreateUsers || canUpdateUsers;
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [perms, setPerms] = useState<Record<string, string[]>>({});
@@ -70,7 +73,7 @@ export default function TeacherPermissionsPage() {
         ]);
         const onlyTeachers = fetchedTeachers.filter((t) => (t.role || '').toLowerCase() === 'teacher');
         setTeachers(onlyTeachers);
-        setGroups(fetchedGroups);
+        setGroups(sortGroupsByName(fetchedGroups));
         const permList = (permsRes?.data || []) as Permission[];
         const map: Record<string, string[]> = {};
         permList.forEach((p) => {
@@ -93,12 +96,7 @@ export default function TeacherPermissionsPage() {
 
   const filteredTeachers = useMemo(() => {
     if (!search.trim()) return teachers;
-    const term = search.toLowerCase();
-    return teachers.filter(
-      (t) =>
-        (t.name || '').toLowerCase().includes(term) ||
-        (t.email || '').toLowerCase().includes(term)
-    );
+    return teachers.filter((t) => matchesSearchQuery(search, t.name, t.email));
   }, [teachers, search]);
 
   const toggleGroup = (email: string, groupId: string) => {

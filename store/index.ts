@@ -90,6 +90,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('authToken');
+      localStorage.removeItem('refreshToken');
     }
     set({
       user: null,

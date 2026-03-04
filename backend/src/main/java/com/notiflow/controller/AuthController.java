@@ -97,6 +97,23 @@ public class AuthController {
         }
     }
 
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout(@RequestBody(required = false) RefreshRequest request) {
+        try {
+            String refreshToken = request != null ? request.refreshToken() : null;
+            if (refreshToken != null && !refreshToken.isBlank()) {
+                Claims claims = refreshJwtService.parseClaims(refreshToken);
+                String jti = claims.get("jti", String.class);
+                if (jti != null && !jti.isBlank()) {
+                    refreshTokenStore.revoke(jti);
+                }
+            }
+        } catch (Exception ignored) {
+            // Logout idempotente: aunque el token sea inválido o ya esté vencido, respondemos OK.
+        }
+        return ResponseEntity.ok(Map.of("message", "Sesión cerrada"));
+    }
+
     @GetMapping("/me")
     public ResponseEntity<UserDto> me(@RequestHeader(HttpHeaders.AUTHORIZATION) Optional<String> authHeader) {
         if (authHeader.isEmpty() || !authHeader.get().startsWith("Bearer ")) {
