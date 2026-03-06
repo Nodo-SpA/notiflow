@@ -17,6 +17,7 @@ import {
   FiUsers,
   FiBarChart2,
   FiSettings,
+  FiPhone,
 } from 'react-icons/fi';
 import squareLogo from '@/logos/Naranjo_Degradado.png';
 
@@ -61,12 +62,20 @@ export const Header: React.FC = () => {
     (hasPermission('users.create') ||
       hasPermission('users.delete') ||
       hasPermission('schools.manage'));
+  const canSeePhoneDirectory =
+    role === 'SUPERADMIN' ||
+    role === 'ADMIN' ||
+    role === 'COORDINATOR' ||
+    role === 'GESTION_ESCOLAR' ||
+    role === 'DIRECTOR' ||
+    role === 'TEACHER';
 
   const mobileMenuItems = useMemo(
     () => [
       { label: 'Dashboard', href: '/dashboard', icon: FiHome },
       ...(canCreateMessage ? [{ label: 'Enviar Mensaje', href: '/messages/new', icon: FiMessageCircle }] : []),
       ...(canListMessages ? [{ label: 'Historial de Mensajes', href: '/messages', icon: FiMessageCircle }] : []),
+      ...(canSeePhoneDirectory ? [{ label: 'Directorio Telefónico', href: '/phone-directory', icon: FiPhone }] : []),
       ...(canSeeManagement
         ? [
             { label: 'Estudiantes y Apoderados', href: '/management/students', icon: FiUsers },
@@ -85,6 +94,7 @@ export const Header: React.FC = () => {
       canManageGroups,
       canSeeReports,
       canSeeSettings,
+      canSeePhoneDirectory,
     ]
   );
 

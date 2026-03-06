@@ -17,9 +17,11 @@ import org.springframework.security.config.Customizer;
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final RequestIdFilter requestIdFilter;
 
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
+    public SecurityConfig(JwtAuthFilter jwtAuthFilter, RequestIdFilter requestIdFilter) {
         this.jwtAuthFilter = jwtAuthFilter;
+        this.requestIdFilter = requestIdFilter;
     }
 
     @Bean
@@ -35,6 +37,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/messages/process-scheduled").permitAll()
                         .anyRequest().authenticated()
                 )
+                .addFilterBefore(requestIdFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }

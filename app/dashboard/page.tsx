@@ -148,9 +148,9 @@ export default function DashboardPage() {
         base.push({ label: `Estudiantes ${effectiveYear}`, value: studentCount });
       }
       if (canSeeUsersPanel) {
-        base.push({ label: 'Usuarios', value: users.length });
+        base.push({ label: 'Funcionarios', value: users.length });
         base.push({
-          label: 'Admins',
+          label: 'Administradores',
           value: users.filter((u) => (u.role || '').toLowerCase() === 'admin').length,
         });
       }
@@ -315,11 +315,11 @@ export default function DashboardPage() {
                   <h3 className="text-lg font-semibold text-secondary mb-3">{s.name}</h3>
                   <div className="space-y-2 text-sm text-gray-700">
                     <div className="flex justify-between">
-                      <span>Usuarios</span>
+                      <span>Funcionarios</span>
                       <span className="font-bold">{loading ? '—' : s.users}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Admins</span>
+                      <span>Administradores</span>
                       <span className="font-bold">{loading ? '—' : s.admins}</span>
                     </div>
                     <div className="flex justify-between">

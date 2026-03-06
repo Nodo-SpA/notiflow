@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -6,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -19,7 +23,13 @@ const Color kSecondary = Color(0xFF0B1727); // gris azulado profundo
 const Color kAccent = Color(0xFFF7F8FA); // gris claro minimal
 const Color kGlow = Color(0xFF7CC6FF); // azul suave para acentos
 const Color kSurface = Colors.white; // superficies blancas y limpias
-const Duration kTimeout = Duration(seconds: 15);
+const Duration kTimeout = Duration(seconds: 30);
+const List<Duration> _requestRetryDelays = [
+  Duration(seconds: 1),
+  Duration(seconds: 2),
+  Duration(seconds: 4),
+];
+final Random _requestIdRandom = Random();
 
 final FlutterLocalNotificationsPlugin localNotifications = FlutterLocalNotificationsPlugin();
 final Set<String> _registeringTokens = <String>{};
@@ -29,18 +39,123 @@ const List<Duration> _registerRetryDelays = [
   Duration(seconds: 7),
 ];
 
-Future<String?> _refreshAuthTokenFromPrefs() async {
+class _PagedResponse {
+  final List<dynamic> items;
+  final bool hasMore;
+  const _PagedResponse({required this.items, required this.hasMore});
+}
+
+bool _isTransientHttpStatus(int statusCode) {
+  return statusCode == 408 ||
+      statusCode == 429 ||
+      statusCode == 500 ||
+      statusCode == 502 ||
+      statusCode == 503 ||
+      statusCode == 504;
+}
+
+bool _isRetriableError(Object error) {
+  return error is TimeoutException || error is SocketException || error is http.ClientException;
+}
+
+String _newRequestId() {
+  final now = DateTime.now().toUtc().microsecondsSinceEpoch;
+  final rand = _requestIdRandom.nextInt(1 << 32).toRadixString(16);
+  return '$now-$rand';
+}
+
+Map<String, String> _withRequestIdHeaders([Map<String, String>? base]) {
+  final headers = <String, String>{
+    if (base != null) ...base,
+  };
+  headers.putIfAbsent('X-Request-Id', _newRequestId);
+  return headers;
+}
+
+Future<http.Response> _sendWithRetry(Future<http.Response> Function() send) async {
+  Object? lastError;
+  for (int attempt = 0; attempt <= _requestRetryDelays.length; attempt++) {
+    try {
+      final res = await send();
+      if (!_isTransientHttpStatus(res.statusCode) || attempt == _requestRetryDelays.length) {
+        return res;
+      }
+    } catch (e) {
+      if (!_isRetriableError(e) || attempt == _requestRetryDelays.length) rethrow;
+      lastError = e;
+    }
+    await Future.delayed(_requestRetryDelays[attempt]);
+  }
+  if (lastError != null) throw lastError;
+  throw Exception('No se pudo completar la solicitud');
+}
+
+String? _extractApiMessage(String body) {
   try {
-    final prefs = await SharedPreferences.getInstance();
-    final refreshToken = prefs.getString('refreshToken');
-    if (refreshToken == null || refreshToken.isEmpty) return null;
-    final res = await http
-        .post(
-          Uri.parse('$apiBase/auth/refresh'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'refreshToken': refreshToken}),
-        )
-        .timeout(kTimeout);
+    final decoded = jsonDecode(body);
+    if (decoded is Map) {
+      final message = decoded['message'] ?? decoded['error'];
+      if (message is String && message.isNotEmpty) return message;
+    }
+  } catch (_) {
+    // silencioso
+  }
+  return null;
+}
+
+String _plainMessageTitle(dynamic raw) {
+  final source = (raw ?? '').toString();
+  if (source.trim().isEmpty) return '';
+  String result = source;
+  // Links/imágenes Markdown -> mantener texto visible
+  result = result.replaceAll(RegExp(r'!\[([^\]]*)\]\(([^)]+)\)'), r'$1');
+  result = result.replaceAll(RegExp(r'\[([^\]]+)\]\(([^)]+)\)'), r'$1');
+  // Quitar marcadores de formato en títulos
+  result = result.replaceAll(RegExp(r'[*_~`]+'), '');
+  result = result.replaceAll(RegExp(r'\r?\n+'), ' ');
+  result = result.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
+  return result;
+}
+
+_PagedResponse _parsePagedResponse(dynamic body, {required int page, required int pageSize}) {
+  List<dynamic> items = [];
+  bool hasMore = false;
+  if (body is List) {
+    items = body;
+    hasMore = items.length >= pageSize;
+    return _PagedResponse(items: items, hasMore: hasMore);
+  }
+  if (body is Map) {
+    final dynamic content = body['items'] ?? body['content'] ?? body['data'];
+    if (content is List) {
+      items = content;
+    }
+    if (body['hasMore'] == true) {
+      hasMore = true;
+    } else {
+      final total = body['total'];
+      if (total is num) {
+        hasMore = page * pageSize < total;
+      } else {
+        hasMore = items.length >= pageSize;
+      }
+    }
+  }
+  return _PagedResponse(items: items, hasMore: hasMore);
+}
+
+Future<String?> _refreshTokenWithRetry(String? refreshToken, SharedPreferences prefs) async {
+  if (refreshToken == null || refreshToken.isEmpty) return null;
+  try {
+    final res = await _sendWithRetry(
+      () => http
+          .post(
+            Uri.parse('$apiBase/auth/refresh'),
+            headers: _withRequestIdHeaders({'Content-Type': 'application/json'}),
+            body: jsonEncode({'refreshToken': refreshToken}),
+          )
+          .timeout(kTimeout),
+    );
     if (res.statusCode == 200) {
       final data = jsonDecode(res.body);
       final newToken = data['token'] as String?;
@@ -59,6 +174,17 @@ Future<String?> _refreshAuthTokenFromPrefs() async {
   return null;
 }
 
+Future<String?> _refreshAuthTokenFromPrefs() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final refreshToken = prefs.getString('refreshToken');
+    return _refreshTokenWithRetry(refreshToken, prefs);
+  } catch (_) {
+    // silencioso
+  }
+  return null;
+}
+
 Future<http.Response> _authedRequest(
   String method,
   Uri uri, {
@@ -68,9 +194,7 @@ Future<http.Response> _authedRequest(
 }) async {
   final prefs = await SharedPreferences.getInstance();
   String? token = prefs.getString('authToken') ?? tokenOverride;
-  Map<String, String> resolved = {
-    if (headers != null) ...headers,
-  };
+  Map<String, String> resolved = _withRequestIdHeaders(headers);
   if (token != null && token.isNotEmpty) {
     resolved['Authorization'] = 'Bearer $token';
   }
@@ -85,12 +209,12 @@ Future<http.Response> _authedRequest(
     }
   }
 
-  http.Response res = await send();
+  http.Response res = await _sendWithRetry(send);
   if (res.statusCode == 401) {
     final newToken = await _refreshAuthTokenFromPrefs();
     if (newToken != null && newToken.isNotEmpty) {
       resolved['Authorization'] = 'Bearer $newToken';
-      res = await send();
+      res = await _sendWithRetry(send);
     }
   }
   return res;
@@ -281,6 +405,70 @@ class StudentOption {
   }
 }
 
+class AppVersionNotice {
+  final String latest;
+  final String minSupported;
+  final String storeUrl;
+  final String message;
+
+  AppVersionNotice({
+    required this.latest,
+    required this.minSupported,
+    required this.storeUrl,
+    required this.message,
+  });
+}
+
+int _compareSemver(String current, String target) {
+  List<int> parse(String value) {
+    final cleaned = value.split('+').first.trim();
+    return cleaned
+        .split('.')
+        .map((part) => int.tryParse(part.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+        .toList();
+  }
+
+  final a = parse(current);
+  final b = parse(target);
+  final maxLen = a.length > b.length ? a.length : b.length;
+  for (int i = 0; i < maxLen; i++) {
+    final left = i < a.length ? a[i] : 0;
+    final right = i < b.length ? b[i] : 0;
+    if (left != right) {
+      return left.compareTo(right);
+    }
+  }
+  return 0;
+}
+
+Future<AppVersionNotice?> _fetchAppVersionNotice() async {
+  try {
+    final info = await PackageInfo.fromPlatform();
+    final installed = info.version;
+    final res = await http.get(
+      Uri.parse('$apiBase/app/version'),
+      headers: _withRequestIdHeaders(),
+    ).timeout(kTimeout);
+    if (res.statusCode != 200) return null;
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    final latest = (data['latest'] ?? '').toString().trim();
+    if (latest.isEmpty) return null;
+    if (_compareSemver(installed, latest) >= 0) {
+      return null;
+    }
+    return AppVersionNotice(
+      latest: latest,
+      minSupported: (data['minSupported'] ?? '').toString().trim(),
+      storeUrl: (data['storeUrl'] ?? '').toString().trim(),
+      message: ((data['message'] ?? '').toString().trim().isEmpty)
+          ? 'Nueva versión disponible'
+          : (data['message'] ?? '').toString().trim(),
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
@@ -353,28 +541,7 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<String?> _refreshAccessTokenSplash(String refreshToken, SharedPreferences prefs) async {
-    try {
-      final res = await http.post(
-        Uri.parse('$apiBase/auth/refresh'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'refreshToken': refreshToken}),
-      ).timeout(kTimeout);
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        final newToken = data['token'] as String?;
-        final newRefresh = data['refreshToken'] as String?;
-        if (newToken != null && newToken.isNotEmpty) {
-          await prefs.setString('authToken', newToken);
-        }
-        if (newRefresh != null && newRefresh.isNotEmpty) {
-          await prefs.setString('refreshToken', newRefresh);
-        }
-        return newToken;
-      }
-    } catch (_) {
-      // silencioso
-    }
-    return null;
+    return _refreshTokenWithRetry(refreshToken, prefs);
   }
 
   Future<void> _bootstrap() async {
@@ -385,6 +552,10 @@ class _SplashScreenState extends State<SplashScreen> {
     await _initLocalNotifications();
     await _initPush();
     _listenForegroundMessages();
+    final versionNotice = await _fetchAppVersionNotice();
+    if (mounted && versionNotice != null) {
+      await _showVersionNotice(versionNotice);
+    }
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('authToken');
     final refresh = prefs.getString('refreshToken');
@@ -418,6 +589,37 @@ class _SplashScreenState extends State<SplashScreen> {
         MaterialPageRoute(builder: (_) => const LoginPage()),
       );
     }
+  }
+
+  Future<void> _showVersionNotice(AppVersionNotice notice) async {
+    final canOpenStore = notice.storeUrl.isNotEmpty;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Nueva versión disponible'),
+        content: Text('${notice.message}\n\nVersión disponible: ${notice.latest}'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Ahora no'),
+          ),
+          if (canOpenStore)
+            FilledButton(
+              onPressed: () async {
+                final uri = Uri.tryParse(notice.storeUrl);
+                if (uri != null) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+                if (dialogContext.mounted) {
+                  Navigator.of(dialogContext).pop();
+                }
+              },
+              child: const Text('Actualizar'),
+            ),
+        ],
+      ),
+    );
   }
 
   Future<void> _initPush() async {
@@ -483,7 +685,7 @@ class _LoginPageState extends State<LoginPage> {
     try {
       final res = await http.post(
         Uri.parse('$apiBase/auth/otp/request'),
-        headers: {'Content-Type': 'application/json'},
+        headers: _withRequestIdHeaders({'Content-Type': 'application/json'}),
         body: jsonEncode({'email': _email.text.trim(), 'studentsOnly': true}),
       ).timeout(kTimeout);
       if (res.statusCode == 200) {
@@ -524,7 +726,7 @@ class _LoginPageState extends State<LoginPage> {
     try {
       final res = await http.post(
         Uri.parse('$apiBase/auth/otp/verify'),
-        headers: {'Content-Type': 'application/json'},
+        headers: _withRequestIdHeaders({'Content-Type': 'application/json'}),
         body: jsonEncode({
           'email': _email.text.trim(),
           'code': _code.text.trim(),
@@ -622,28 +824,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<String?> _refreshAccessToken(String refreshToken, SharedPreferences prefs) async {
-    try {
-      final res = await http.post(
-        Uri.parse('$apiBase/auth/refresh'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'refreshToken': refreshToken}),
-      ).timeout(kTimeout);
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        final newToken = data['token'] as String?;
-        final newRefresh = data['refreshToken'] as String?;
-        if (newToken != null && newToken.isNotEmpty) {
-          await prefs.setString('authToken', newToken);
-        }
-        if (newRefresh != null && newRefresh.isNotEmpty) {
-          await prefs.setString('refreshToken', newRefresh);
-        }
-        return newToken;
-      }
-    } catch (_) {
-      // silencioso
-    }
-    return null;
+    return _refreshTokenWithRetry(refreshToken, prefs);
   }
 
   @override
@@ -1380,6 +1561,8 @@ class _MuroPageState extends State<MuroPage> {
   List<Map<String, dynamic>> _messages = [];
   int _loaded = 0;
   final int _pageSize = 10;
+  static const int _backendPageSize = 50;
+  static const int _maxBackendPages = 20;
   bool _loading = true;
   bool _loadingMore = false;
   String? _error;
@@ -1407,46 +1590,62 @@ class _MuroPageState extends State<MuroPage> {
     return !hasRecipients || hasAll || rec.length > 50; // heurística para "toda la comunidad"
   }
 
+  Future<_PagedResponse> _loadWallPage(int page) async {
+    final res = await _authedGet(
+      _messagesUrl(page: page, pageSize: _backendPageSize),
+      token: widget.token,
+    );
+    if (res.statusCode == 200) {
+      final body = jsonDecode(res.body);
+      return _parsePagedResponse(body, page: page, pageSize: _backendPageSize);
+    }
+
+    // Fallback: usar mensajes personales y filtrar los masivos
+    final resSelf = await _authedGet(
+      _messagesUrl(self: true, page: page, pageSize: _backendPageSize),
+      token: widget.token,
+    );
+    if (resSelf.statusCode == 200) {
+      final body = jsonDecode(resSelf.body);
+      return _parsePagedResponse(body, page: page, pageSize: _backendPageSize);
+    }
+
+    final msg = _extractApiMessage(res.body) ?? _extractApiMessage(resSelf.body);
+    throw Exception(msg ?? 'Error al cargar muro (${res.statusCode})');
+  }
+
   Future<void> _loadWall() async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      List<dynamic> data = [];
-      List<dynamic> _extractList(dynamic body) {
-        if (body is List) return body;
-        if (body is Map) {
-          final content = body['content'] ?? body['items'] ?? body['data'];
-          if (content is List) return content;
-        }
-        return [];
+      final wall = <Map<String, dynamic>>[];
+      final seenIds = <String>{};
+      bool hasMore = true;
+      int page = 1;
+      int loadedPages = 0;
+
+      while (hasMore && loadedPages < _maxBackendPages) {
+        final pageData = await _loadWallPage(page);
+        final scoped = pageData.items
+            .whereType<Map>()
+            .where(_isBroadcast)
+            .map((e) => Map<String, dynamic>.from(e))
+            .where((msg) {
+              final id = (msg['id'] ?? '').toString().trim();
+              if (id.isEmpty) return true;
+              if (seenIds.contains(id)) return false;
+              seenIds.add(id);
+              return true;
+            })
+            .toList();
+        wall.addAll(scoped);
+        hasMore = pageData.hasMore;
+        page += 1;
+        loadedPages += 1;
       }
-      // Intento principal: mensajes sin filtro (puede fallar por permisos)
-      final res = await _authedGet(_messagesUrl(), token: widget.token);
-      if (res.statusCode == 200) {
-        data = _extractList(jsonDecode(res.body));
-      } else {
-        // Fallback: usar mensajes personales y filtrar los masivos
-        final resSelf = await _authedGet(_messagesUrl(self: true), token: widget.token);
-        if (resSelf.statusCode == 200) {
-          data = _extractList(jsonDecode(resSelf.body));
-        } else {
-          final msg = (() {
-            try {
-              return (jsonDecode(res.body) as Map?)?['message'] ?? (jsonDecode(resSelf.body) as Map?)?['message'];
-            } catch (_) {
-              return null;
-            }
-          })();
-          throw Exception(msg ?? 'Error al cargar muro (${res.statusCode})');
-        }
-      }
-      final wall = data
-          .whereType<Map>()
-          .where(_isBroadcast)
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
+
       wall.sort((a, b) {
         final da = DateTime.tryParse(a['createdAt'] ?? '') ?? DateTime.now();
         final db = DateTime.tryParse(b['createdAt'] ?? '') ?? DateTime.now();
@@ -1466,9 +1665,11 @@ class _MuroPageState extends State<MuroPage> {
     }
   }
 
-  String _messagesUrl({bool self = false}) {
+  String _messagesUrl({bool self = false, int? page, int? pageSize}) {
     final params = <String, String>{};
     if (self) params['self'] = 'true';
+    if (page != null) params['page'] = '$page';
+    if (pageSize != null) params['pageSize'] = '$pageSize';
     final studentId = widget.studentId;
     if (studentId != null && studentId.isNotEmpty) {
       params['studentId'] = studentId;
@@ -1493,13 +1694,8 @@ class _MuroPageState extends State<MuroPage> {
     void loadMore() {
       if (_loadingMore || !hasMore) return;
       setState(() => _loadingMore = true);
-      Future.delayed(const Duration(milliseconds: 100), () {
-        if (!mounted) return;
-        setState(() {
-          _loaded = (_loaded + _pageSize).clamp(0, _messages.length);
-          _loadingMore = false;
-        });
-      });
+      _loaded = (_loaded + _pageSize).clamp(0, _messages.length);
+      setState(() => _loadingMore = false);
     }
 
     if (_loading) {
@@ -1544,7 +1740,9 @@ class _MuroPageState extends State<MuroPage> {
             final hasAttachments = (m['attachments'] as List?)?.isNotEmpty == true;
             final preview = (m['content'] ?? '').toString();
             final reason = (m['reason'] ?? '').toString();
-            final title = reason.isNotEmpty ? reason : (m['senderName'] ?? 'Comunidad');
+            final rawTitle = reason.isNotEmpty ? reason : (m['senderName'] ?? 'Comunidad');
+            final normalizedTitle = _plainMessageTitle(rawTitle);
+            final title = normalizedTitle.isNotEmpty ? normalizedTitle : 'Comunidad';
             final dateLabel = _formatDate(m['createdAt'] as String?);
             return Container(
               margin: const EdgeInsets.only(bottom: 12),
@@ -1745,7 +1943,11 @@ class _CalendarioPageState extends State<CalendarioPage> {
             _events = data.cast<Map<String, dynamic>>();
             _dayCounts = _buildDayCounts(_events);
           });
-          await _scheduleReminders();
+          try {
+            await _scheduleReminders();
+          } catch (e) {
+            debugPrint('No se pudieron programar recordatorios locales: $e');
+          }
         }
       } else {
         throw Exception('No se pudieron cargar los eventos');
@@ -1834,7 +2036,7 @@ class _CalendarioPageState extends State<CalendarioPage> {
         body,
         tzDate,
         kEventNotificationDetails,
-        androidAllowWhileIdle: true,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.wallClockTime,
         matchDateTimeComponents: DateTimeComponents.dateAndTime,
       );
@@ -2148,6 +2350,8 @@ class _MessagesPageState extends State<MessagesPage> {
   List<dynamic> _messages = [];
   int _loaded = 0;
   final int _pageSize = 10;
+  static const int _backendPageSize = 50;
+  static const int _maxBackendPages = 20;
   bool _loadingMore = false;
   bool _loading = true;
   String? _error;
@@ -2212,43 +2416,62 @@ class _MessagesPageState extends State<MessagesPage> {
       _error = null;
     });
     try {
-      List<dynamic> _extractList(dynamic body) {
-        if (body is List) return body;
-        if (body is Map) {
-          final content = body['content'] ?? body['items'] ?? body['data'];
-          if (content is List) return content;
+      final all = <dynamic>[];
+      final seenIds = <String>{};
+      bool hasMore = true;
+      int page = 1;
+      int loadedPages = 0;
+
+      while (hasMore && loadedPages < _maxBackendPages) {
+        final res = await _authedGet(
+          _messagesUrl(page: page, pageSize: _backendPageSize),
+          token: widget.token,
+        );
+        if (res.statusCode != 200) {
+          final msg = _extractApiMessage(res.body);
+          throw Exception(msg ?? 'Error al cargar mensajes (${res.statusCode})');
         }
-        return [];
+        final parsed = _parsePagedResponse(
+          jsonDecode(res.body),
+          page: page,
+          pageSize: _backendPageSize,
+        );
+        for (final entry in parsed.items) {
+          if (entry is! Map) {
+            all.add(entry);
+            continue;
+          }
+          final id = (entry['id'] ?? '').toString().trim();
+          if (id.isNotEmpty) {
+            if (seenIds.contains(id)) continue;
+            seenIds.add(id);
+          }
+          all.add(entry);
+        }
+        hasMore = parsed.hasMore;
+        page += 1;
+        loadedPages += 1;
       }
-      final res = await _authedGet(_messagesUrl(), token: widget.token);
-      if (res.statusCode == 200) {
-        final data = _extractList(jsonDecode(res.body));
-        final localRead = await _loadLocalReadIds();
-        if (!mounted) return;
-        setState(() {
-          _messages = data.map((m) {
-            if (m is! Map) return m;
-            final id = m['id'];
-            if (id == null) return m;
-            final readBy = (m['appReadBy'] as List?)?.toList() ?? [];
-            if (localRead.contains(id) && !readBy.contains(widget.email)) {
-              readBy.add(widget.email);
-            }
-            return {...m, 'appReadBy': readBy};
-          }).toList();
-          _loaded = _messages.length > _pageSize ? _pageSize : _messages.length;
-          _unreadCount = _messages.whereType<Map>().where((m) {
-            final List<dynamic> readBy = (m['appReadBy'] as List?) ?? [];
-            return !readBy.contains(widget.email);
-          }).length;
-        });
-      } else {
-        String? msg;
-        try {
-          msg = (jsonDecode(res.body) as Map?)?['message'] as String?;
-        } catch (_) {}
-        throw Exception(msg ?? 'Error al cargar mensajes (${res.statusCode})');
-      }
+
+      final localRead = await _loadLocalReadIds();
+      if (!mounted) return;
+      setState(() {
+        _messages = all.map((m) {
+          if (m is! Map) return m;
+          final id = m['id'];
+          if (id == null) return m;
+          final readBy = (m['appReadBy'] as List?)?.toList() ?? [];
+          if (localRead.contains(id) && !readBy.contains(widget.email)) {
+            readBy.add(widget.email);
+          }
+          return {...m, 'appReadBy': readBy};
+        }).toList();
+        _loaded = _messages.length > _pageSize ? _pageSize : _messages.length;
+        _unreadCount = _messages.whereType<Map>().where((m) {
+          final List<dynamic> readBy = (m['appReadBy'] as List?) ?? [];
+          return !readBy.contains(widget.email);
+        }).length;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString());
@@ -2258,8 +2481,10 @@ class _MessagesPageState extends State<MessagesPage> {
     }
   }
 
-  String _messagesUrl() {
+  String _messagesUrl({int? page, int? pageSize}) {
     final params = <String, String>{'self': 'true'};
+    if (page != null) params['page'] = '$page';
+    if (pageSize != null) params['pageSize'] = '$pageSize';
     final studentId = widget.studentId;
     if (studentId != null && studentId.isNotEmpty) {
       params['studentId'] = studentId;
@@ -2365,6 +2590,7 @@ class _MessagesPageState extends State<MessagesPage> {
                       final bool isRead = readBy.contains(widget.email);
                       final hasAttachments = (m['attachments'] as List?)?.isNotEmpty == true;
                       final contentPreview = (m['content'] ?? '').toString();
+                      final titleText = _plainMessageTitle(m['reason'] ?? m['content'] ?? '');
                       final dateLabel = _formatDateFriendly(m['createdAt'] as String?);
                       return AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
@@ -2404,7 +2630,7 @@ class _MessagesPageState extends State<MessagesPage> {
                             ),
                           ),
                           title: Text(
-                            m['reason'] ?? m['content'] ?? '',
+                            titleText.isNotEmpty ? titleText : 'Mensaje',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontWeight: FontWeight.w800, color: kSecondary),
@@ -2686,6 +2912,8 @@ class _MessageDetailBodyState extends State<_MessageDetailBody> {
     final String? firstPreviewUrl = (firstPreviewImage != null && firstPreviewImage.isNotEmpty)
         ? firstPreviewImage['downloadUrl'] as String?
         : null;
+    final detailTitleRaw = _plainMessageTitle(_data['reason'] ?? _data['content'] ?? '');
+    final detailTitle = detailTitleRaw.isNotEmpty ? detailTitleRaw : 'Mensaje';
     return Scaffold(
       backgroundColor: kAccent,
       appBar: AppBar(
@@ -2708,7 +2936,7 @@ class _MessageDetailBodyState extends State<_MessageDetailBody> {
                           borderRadius: BorderRadius.circular(14),
                         ),
                         child: Text(
-                          _data['reason'] ?? _data['content'] ?? '',
+                          detailTitle,
                           style: const TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.w900,

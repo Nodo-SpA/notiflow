@@ -159,6 +159,10 @@ class APIClient {
     return this.client.get('/students', { params });
   }
 
+  async getPhoneDirectory(params?: any) {
+    return this.client.get('/phone-directory', { params });
+  }
+
   async createStudent(data: {
     schoolId?: string;
     year?: string;

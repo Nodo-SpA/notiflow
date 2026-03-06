@@ -918,13 +918,25 @@ export default function NewMessagePage() {
     if (memberIds.length === 0) {
       return { count: 0, label: 'sin miembros' };
     }
-    const emailMembers = memberIds.filter((m) => (m || '').includes('@'));
-    if (emailMembers.length > 0) {
-      const uniqueEmails = new Set(emailMembers.map((e) => e.trim().toLowerCase()).filter(Boolean));
-      return { count: uniqueEmails.size, label: 'destinatarios' };
-    }
     const emailSet = new Set<string>();
+    const unresolvedMembers = new Set<string>();
+
+    const normalizeMember = (value: string) =>
+      (value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[‐‑‒–—−]/g, '-')
+        .replace(/[.\s'"`]/g, '');
+
     memberIds.forEach((id) => {
+      const raw = (id || '').trim();
+      if (!raw) return;
+
+      if (raw.includes('@')) {
+        emailSet.add(raw.toLowerCase());
+        return;
+      }
+
       const user = userById.get(id);
       if (user?.email) emailSet.add(user.email.trim().toLowerCase());
       const student = studentById[id];
@@ -932,12 +944,18 @@ export default function NewMessagePage() {
         const selfEmail = (student.email || '').trim();
         if (selfEmail) emailSet.add(selfEmail.toLowerCase());
         guardianEmailsOf(student).forEach((e) => emailSet.add(e.toLowerCase()));
+      } else if (!user?.email) {
+        // Si no se puede resolver a email, igual contamos el miembro por su ID para no subestimar.
+        unresolvedMembers.add(normalizeMember(raw));
       }
     });
-    if (emailSet.size > 0) {
-      return { count: emailSet.size, label: 'destinatarios' };
+
+    const total = emailSet.size + unresolvedMembers.size;
+    if (total > 0) {
+      return { count: total, label: 'destinatarios' };
     }
-    return { count: new Set(memberIds).size, label: 'miembros' };
+
+    return { count: new Set(memberIds.map((m) => normalizeMember(m))).size, label: 'miembros' };
   };
 
   const availableGroups = useMemo(() => {
@@ -1774,7 +1792,7 @@ export default function NewMessagePage() {
                 <div className="glass-panel rounded-xl p-4 soft-shadow space-y-3">
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                     <div className="w-full">
-                      <p className="text-xs uppercase tracking-wide text-gray-500">Usuarios</p>
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Funcionarios</p>
                       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                         <input
                           type="search"

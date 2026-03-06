@@ -8,6 +8,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.Date;
 import java.util.Map;
@@ -22,7 +25,15 @@ public class JwtService {
             @Value("${app.jwt.secret:change-me-dev-secret}") String secret,
             @Value("${app.jwt.expiration-seconds:86400}") long expirationSeconds
     ) {
-        this.key = Keys.hmacShaKeyFor(secret.getBytes());
+        byte[] raw = secret.getBytes(StandardCharsets.UTF_8);
+        if (raw.length < 32) { // < 256 bits
+            try {
+                raw = MessageDigest.getInstance("SHA-256").digest(raw);
+            } catch (NoSuchAlgorithmException e) {
+                throw new IllegalStateException("No SHA-256 available for jwt secret", e);
+            }
+        }
+        this.key = Keys.hmacShaKeyFor(raw);
         this.expirationSeconds = expirationSeconds;
     }
 

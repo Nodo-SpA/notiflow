@@ -8,7 +8,9 @@ import com.notiflow.model.DeviceToken;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
@@ -67,20 +69,35 @@ public class DeviceTokenService {
     public List<String> tokensForRecipients(List<String> recipients, String schoolId) {
         try {
             if (recipients == null || recipients.isEmpty()) return List.of();
-            var emails = recipients.stream().map(String::toLowerCase).collect(Collectors.toList());
-            com.google.cloud.firestore.Query base = firestore.collectionGroup("deviceTokens")
-                    .whereIn("email", emails);
-            if (schoolId != null && !schoolId.isBlank()) {
-                base = base.whereEqualTo("schoolId", schoolId);
-            }
-            ApiFuture<QuerySnapshot> snap = base.get();
-            return snap.get().getDocuments().stream()
-                    .map(d -> d.toObject(DeviceToken.class).getToken())
-                    .filter(t -> t != null && !t.isBlank())
+            List<String> emails = recipients.stream()
+                    .filter(e -> e != null && !e.isBlank())
+                    .map(String::trim)
+                    .map(String::toLowerCase)
                     .distinct()
                     .toList();
+            if (emails.isEmpty()) return List.of();
+
+            final int inBatchSize = 30; // Firestore IN max comparison values
+            Set<String> tokens = new HashSet<>();
+            for (int i = 0; i < emails.size(); i += inBatchSize) {
+                List<String> batch = emails.subList(i, Math.min(i + inBatchSize, emails.size()));
+                com.google.cloud.firestore.Query base = firestore.collectionGroup("deviceTokens")
+                        .whereIn("email", batch);
+                if (schoolId != null && !schoolId.isBlank()) {
+                    base = base.whereEqualTo("schoolId", schoolId);
+                }
+                ApiFuture<QuerySnapshot> snap = base.get();
+                for (QueryDocumentSnapshot doc : snap.get().getDocuments()) {
+                    DeviceToken dt = doc.toObject(DeviceToken.class);
+                    if (dt == null || dt.getToken() == null || dt.getToken().isBlank()) continue;
+                    tokens.add(dt.getToken());
+                }
+            }
+            return tokens.stream().toList();
         } catch (InterruptedException | ExecutionException e) {
-            Thread.currentThread().interrupt();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new RuntimeException("No se pudieron obtener tokens", e);
         }
     }

@@ -12,6 +12,7 @@ import {
   FiSettings,
   FiChevronDown,
   FiCalendar,
+  FiPhone,
 } from 'react-icons/fi';
 import { useAuthStore } from '@/store';
 
@@ -51,6 +52,13 @@ export const Sidebar: React.FC = () => {
     role === 'ADMIN' ||
     role === 'TEACHER' ||
     canCreateEventsPermission;
+  const canSeePhoneDirectory =
+    role === 'SUPERADMIN' ||
+    role === 'ADMIN' ||
+    role === 'COORDINATOR' ||
+    role === 'GESTION_ESCOLAR' ||
+    role === 'DIRECTOR' ||
+    role === 'TEACHER';
 
   const menuItems = useMemo(
     () => [
@@ -76,7 +84,13 @@ export const Sidebar: React.FC = () => {
         href: '/events',
         icon: FiCalendar,
         hidden: false, // visible para ver agenda; creación se controla en la página
-        badge: canCreateEvents ? 'Nuevo' : undefined,
+      },
+      {
+        label: 'Directorio Telefónico',
+        href: '/phone-directory',
+        icon: FiPhone,
+        hidden: !canSeePhoneDirectory,
+        badge: canSeePhoneDirectory ? 'Nuevo' : undefined,
       },
       {
         label: 'Gestión',
@@ -110,6 +124,7 @@ export const Sidebar: React.FC = () => {
       canSeeReports,
       canSeeSettings,
       canCreateEvents,
+      canSeePhoneDirectory,
     ]
   );
 

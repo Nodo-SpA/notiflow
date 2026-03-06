@@ -185,9 +185,10 @@ public class MessageController {
     @GetMapping(value = "/{id}/track", produces = org.springframework.http.MediaType.IMAGE_PNG_VALUE)
     public ResponseEntity<byte[]> trackEmail(
             @PathVariable("id") String messageId,
-            @RequestParam("recipient") String recipient
+            @RequestParam("recipient") String recipient,
+            @RequestParam(value = "schoolId", required = false) String schoolId
     ) {
-        messageService.markEmailOpened(messageId, recipient);
+        messageService.markEmailOpened(messageId, recipient, schoolId);
         // Píxel transparente 1x1
         byte[] pixel = new byte[]{
                 (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,

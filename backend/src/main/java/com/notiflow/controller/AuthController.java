@@ -20,6 +20,7 @@ import com.notiflow.service.RefreshTokenStore;
 import com.notiflow.service.PasswordResetService;
 import com.notiflow.service.MultiStudentMatchException;
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -119,20 +120,25 @@ public class AuthController {
         if (authHeader.isEmpty() || !authHeader.get().startsWith("Bearer ")) {
             return ResponseEntity.status(401).build();
         }
-        String token = authHeader.get().substring(7);
-        Claims claims = jwtService.parseClaims(token);
+        try {
+            String token = authHeader.get().substring(7);
+            Claims claims = jwtService.parseClaims(token);
 
-        UserDto user = new UserDto(
-                claims.getSubject(), // usamos el email como ID base
-                claims.get("name", String.class),
-                claims.getSubject(),
-                UserRole.valueOf(claims.get("role", String.class)),
-                claims.get("schoolId", String.class),
-                claims.get("schoolName", String.class),
-                claims.get("rut", String.class)
-        );
+            UserDto user = new UserDto(
+                    claims.getSubject(), // usamos el email como ID base
+                    claims.get("name", String.class),
+                    claims.getSubject(),
+                    UserRole.valueOf(claims.get("role", String.class)),
+                    claims.get("schoolId", String.class),
+                    claims.get("schoolName", String.class),
+                    claims.get("rut", String.class)
+            );
 
-        return ResponseEntity.ok(user);
+            return ResponseEntity.ok(user);
+        } catch (JwtException ex) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(null);
+        }
     }
 
     @PostMapping("/forgot")

@@ -13,6 +13,7 @@ import com.google.api.client.json.jackson2.JacksonFactory;
 import com.google.auth.oauth2.GoogleCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -61,7 +62,12 @@ public class VertexAiService {
                 .replace("{tone}", style)
                 .replace("{texto}", text)
                 .replace("{text}", text);
-        return callModel(rewriteModel, prompt);
+        try {
+            return callModel(rewriteModel, prompt);
+        } catch (RuntimeException ex) {
+            log.warn("Vertex IA no disponible para rewrite (schoolId={}, requestId={}), devolviendo texto original", schoolId, requestId());
+            return text;
+        }
     }
 
     public ModerationResult moderate(String text) {
@@ -83,7 +89,13 @@ public class VertexAiService {
                 .replace("{texto}", text)
                 .replace("{text}", text);
 
-        String raw = callModel(moderationModel, prompt);
+        String raw;
+        try {
+            raw = callModel(moderationModel, prompt);
+        } catch (RuntimeException ex) {
+            log.warn("Vertex IA no disponible para moderate (schoolId={}, requestId={}), permitiendo por fallback", schoolId, requestId());
+            return new ModerationResult(true, List.of());
+        }
         try {
             String cleaned = cleanJson(raw);
             JsonNode node = mapper.readTree(cleaned);
@@ -91,7 +103,12 @@ public class VertexAiService {
             List<String> reasons = mapper.convertValue(node.path("reasons"), mapper.getTypeFactory().constructCollectionType(List.class, String.class));
             return new ModerationResult(allowed, reasons == null ? List.of() : reasons);
         } catch (Exception e) {
-            log.warn("No se pudo parsear respuesta de moderación, se permite por defecto. resp={}", raw, e);
+            log.warn(
+                    "No se pudo parsear respuesta de moderación, se permite por defecto (schoolId={}, requestId={}, rawLength={})",
+                    schoolId,
+                    requestId(),
+                    raw == null ? 0 : raw.length()
+            );
             return new ModerationResult(true, List.of());
         }
     }
@@ -117,7 +134,13 @@ public class VertexAiService {
                 %s
                 """.formatted(base, rulesText, style, subject == null ? "" : subject, text);
 
-        String raw = callModel(rewriteModel, prompt);
+        String raw;
+        try {
+            raw = callModel(rewriteModel, prompt);
+        } catch (RuntimeException ex) {
+            log.warn("Vertex IA no disponible para rewrite-moderate (schoolId={}, requestId={}), devolviendo original", schoolId, requestId());
+            return new RewriteModerateResult(text, subject == null ? "" : subject, true, List.of());
+        }
         String subjectSuggestion = subject;
         String bodySuggestion = text;
         boolean allowed = true;
@@ -140,7 +163,12 @@ public class VertexAiService {
                 reasons = mapper.convertValue(node.get("reasons"), mapper.getTypeFactory().constructCollectionType(List.class, String.class));
             }
         } catch (Exception e) {
-            log.warn("No se pudo parsear JSON de rewrite, usando fallback. raw={}", raw);
+            log.warn(
+                    "No se pudo parsear JSON de rewrite, usando fallback (schoolId={}, requestId={}, rawLength={})",
+                    schoolId,
+                    requestId(),
+                    raw == null ? 0 : raw.length()
+            );
             String fallback = raw == null ? "" : raw.trim();
             // Si el modelo devolvió texto plano, lo usamos como cuerpo
             if (!fallback.startsWith("{")) {
@@ -209,7 +237,7 @@ public class VertexAiService {
             log.warn("Respuesta sin texto, devolviendo prompt original");
             return prompt;
         } catch (IOException e) {
-            log.error("Error llamando a Vertex AI", e);
+            log.error("Error llamando a Vertex AI (requestId={})", requestId(), e);
             throw new RuntimeException("No se pudo llamar a Vertex AI");
         }
     }
@@ -230,5 +258,10 @@ public class VertexAiService {
             cleaned = cleaned.substring(firstBrace);
         }
         return cleaned;
+    }
+
+    private String requestId() {
+        String id = MDC.get("requestId");
+        return (id == null || id.isBlank()) ? "n/a" : id;
     }
 }

@@ -26,6 +26,7 @@ import com.notiflow.util.CurrentUser;
 import com.notiflow.util.SearchUtils;
 import com.notiflow.model.UserDocument;
 import com.notiflow.model.UserRole;
+import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import com.google.auth.oauth2.GoogleCredentials;
@@ -36,12 +37,17 @@ import java.time.Year;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Collectors;
 import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.nio.charset.StandardCharsets;
 
 @Service
@@ -64,6 +70,10 @@ public class MessageService {
     private final String fcmCredentialsJson;
     private final String fcmProjectId;
     private GoogleCredentials fcmCredentials;
+    private final Map<String, Long> trackDedupCache = new ConcurrentHashMap<>();
+    private final ExecutorService immediateDeliveryExecutor;
+    private static final long TRACK_DEDUP_WINDOW_MS = TimeUnit.MINUTES.toMillis(10);
+    private static final int TRACK_DEDUP_MAX_ENTRIES = 200_000;
 
     public MessageService(
             Firestore firestore,
@@ -79,7 +89,8 @@ public class MessageService {
             @org.springframework.beans.factory.annotation.Value("${ATTACHMENTS_BUCKET:}") String attachmentsBucket,
             @org.springframework.beans.factory.annotation.Value("${app.fcm.server-key:}") String fcmServerKey,
             @org.springframework.beans.factory.annotation.Value("${app.fcm.credentials-json:}") String fcmCredentialsJson,
-            @org.springframework.beans.factory.annotation.Value("${app.fcm.project-id:}") String fcmProjectId
+            @org.springframework.beans.factory.annotation.Value("${app.fcm.project-id:}") String fcmProjectId,
+            @org.springframework.beans.factory.annotation.Value("${app.messages.delivery-threads:4}") int deliveryThreads
     ) {
         this.firestore = firestore;
         this.emailService = emailService;
@@ -96,6 +107,14 @@ public class MessageService {
         this.fcmProjectId = fcmProjectId;
         this.fcmCredentials = parseCredentials(fcmCredentialsJson);
         this.teacherPermissionService = teacherPermissionService;
+        int poolSize = Math.max(1, deliveryThreads);
+        AtomicInteger threadCounter = new AtomicInteger(1);
+        this.immediateDeliveryExecutor = Executors.newFixedThreadPool(poolSize, runnable -> {
+            Thread t = new Thread(runnable);
+            t.setName("message-delivery-" + threadCounter.getAndIncrement());
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     public MessageListResponse list(String schoolId, boolean isGlobal, String year, String senderEmailFilter, String recipientEmailFilter, String query, int page, int pageSize, String studentIdFilter) {
@@ -575,13 +594,86 @@ public class MessageService {
             }
 
             // Envío inmediato
-            deliverNow(msg, attachments, channels, schoolLogo, schoolName, schoolId);
-            return toDto(msg, CurrentUser.fromContext().orElse(null));
+            msg.setStatus(MessageStatus.PENDING);
+            if (channels.contains("email")) {
+                msg.setEmailStatus(MessageStatus.PENDING);
+            }
+            if (channels.contains("app")) {
+                msg.setAppStatus(MessageStatus.PENDING);
+            }
+            tenantMessages(schoolId).document(msg.getId()).set(msg).get();
+            MessageDto response = toDto(msg, CurrentUser.fromContext().orElse(null));
+            dispatchImmediateDelivery(msg, attachments, channels, schoolLogo, schoolName, schoolId);
+            return response;
         } catch (InterruptedException | ExecutionException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
             throw new RuntimeException("Error creando mensaje", e);
+        }
+    }
+
+    @PreDestroy
+    void shutdownDeliveryExecutor() {
+        immediateDeliveryExecutor.shutdown();
+    }
+
+    private void dispatchImmediateDelivery(
+            MessageDocument msg,
+            List<AttachmentRequest> attachments,
+            List<String> channels,
+            String schoolLogo,
+            String schoolName,
+            String schoolId
+    ) {
+        try {
+            immediateDeliveryExecutor.submit(() -> {
+                try {
+                    deliverNow(msg, attachments, channels, schoolLogo, schoolName, schoolId);
+                } catch (Exception ex) {
+                    org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                            .error("Error en worker de envío de mensaje {}: {}", msg.getId(), ex.getMessage());
+                    markDeliveryFailed(msg, channels, schoolId);
+                }
+            });
+        } catch (RejectedExecutionException ex) {
+            org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                    .error("No se pudo encolar envío de mensaje {}: {}", msg.getId(), ex.getMessage());
+            markDeliveryFailed(msg, channels, schoolId);
+        }
+    }
+
+    private void markDeliveryFailed(MessageDocument msg, List<String> channels, String schoolId) {
+        msg.setStatus(MessageStatus.FAILED);
+        if (channels.contains("email")) {
+            msg.setEmailStatus(MessageStatus.FAILED);
+        }
+        if (channels.contains("app")) {
+            msg.setAppStatus(MessageStatus.FAILED);
+        }
+        if (msg.getEmailStatuses() != null && !msg.getEmailStatuses().isEmpty()) {
+            Map<String, MessageStatus> failed = new HashMap<>(msg.getEmailStatuses());
+            for (String key : failed.keySet()) {
+                failed.put(key, MessageStatus.FAILED);
+            }
+            msg.setEmailStatuses(failed);
+        }
+        if (msg.getAppStatuses() != null && !msg.getAppStatuses().isEmpty()) {
+            Map<String, MessageStatus> failed = new HashMap<>(msg.getAppStatuses());
+            for (String key : failed.keySet()) {
+                failed.put(key, MessageStatus.FAILED);
+            }
+            msg.setAppStatuses(failed);
+        }
+        msg.setScheduledAt(null);
+        try {
+            tenantMessages(schoolId).document(msg.getId()).set(msg).get();
+        } catch (InterruptedException | ExecutionException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                    .error("No se pudo persistir estado FAILED para {}: {}", msg.getId(), e.getMessage());
         }
     }
 
@@ -707,6 +799,7 @@ public class MessageService {
 
     private void deliverNow(MessageDocument msg, List<AttachmentRequest> attachments, List<String> channels, String schoolLogo, String schoolName, String schoolId) {
         boolean mailOk = true;
+        boolean appOk = true;
         MessageStatus emailStatus = null;
         MessageStatus appStatus = null;
         Map<String, MessageStatus> perRecipientEmail = msg.getEmailStatuses() != null ? new HashMap<>(msg.getEmailStatuses()) : new HashMap<>();
@@ -716,95 +809,118 @@ public class MessageService {
                 ? schoolName
                 : "Notiflow") + " - Nuevo mensaje de " + (msg.getSenderName() != null ? msg.getSenderName() : "Usuario");
 
-        if (channels.contains("email") && emailService.isEnabled()) {
-            List<String> emails = msg.getRecipients() != null
-                    ? msg.getRecipients().stream().filter(r -> r != null && r.contains("@")).collect(Collectors.toList())
-                    : List.of();
-            if (emails.isEmpty()) {
-                mailOk = false;
-                org.slf4j.LoggerFactory.getLogger(MessageService.class)
-                        .warn("No se encontraron correos válidos en recipients");
-            }
-            for (String to : emails) {
-                // usa el correo como "nombre" del destinatario para el chip Para
-                String htmlBody = buildHtmlBody(
-                        msg.getContent(),
-                        msg.getSenderName(),
-                        msg.getSenderEmail(),
-                        msg.getReason(),
-                        attachments,
-                        schoolLogo,
-                        schoolName,
-                        to
-                );
-                String htmlWithTracking = appendTrackingPixel(htmlBody, msg.getId(), to);
-                boolean sent = emailService.sendMessageEmail(
-                        to,
-                        subject,
-                        htmlWithTracking,
-                        textBody,
-                        attachments
-                );
-                String key = to == null ? "" : to.trim().toLowerCase();
-                if (!key.isBlank()) {
-                    perRecipientEmail.put(key, sent ? MessageStatus.SENT : MessageStatus.FAILED);
+        try {
+            if (channels.contains("email") && emailService.isEnabled()) {
+                List<String> emails = msg.getRecipients() != null
+                        ? msg.getRecipients().stream().filter(r -> r != null && r.contains("@")).collect(Collectors.toList())
+                        : List.of();
+                if (emails.isEmpty()) {
+                    mailOk = false;
+                    org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                            .warn("No se encontraron correos válidos en recipients");
                 }
-                mailOk = mailOk && sent;
-            }
-            msg.setEmailStatuses(perRecipientEmail);
-        } else {
-            if (channels.contains("email")) {
-                mailOk = false;
-                org.slf4j.LoggerFactory.getLogger(MessageService.class)
-                        .warn("EmailService no está habilitado; no se enviarán correos");
-                if (msg.getRecipients() != null) {
-                    for (String r : msg.getRecipients()) {
-                        if (r != null) {
-                            String key = r.trim().toLowerCase();
-                            if (!key.isBlank()) {
-                                perRecipientEmail.put(key, MessageStatus.FAILED);
+                for (String to : emails) {
+                    // usa el correo como "nombre" del destinatario para el chip Para
+                    String htmlBody = buildHtmlBody(
+                            msg.getContent(),
+                            msg.getSenderName(),
+                            msg.getSenderEmail(),
+                            msg.getReason(),
+                            attachments,
+                            schoolLogo,
+                            schoolName,
+                            to
+                    );
+                    String htmlWithTracking = appendTrackingPixel(htmlBody, msg.getId(), to, schoolId);
+                    boolean sent = emailService.sendMessageEmail(
+                            to,
+                            subject,
+                            htmlWithTracking,
+                            textBody,
+                            attachments
+                    );
+                    String key = to == null ? "" : to.trim().toLowerCase();
+                    if (!key.isBlank()) {
+                        perRecipientEmail.put(key, sent ? MessageStatus.SENT : MessageStatus.FAILED);
+                    }
+                    mailOk = mailOk && sent;
+                }
+                msg.setEmailStatuses(perRecipientEmail);
+            } else {
+                if (channels.contains("email")) {
+                    mailOk = false;
+                    org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                            .warn("EmailService no está habilitado; no se enviarán correos");
+                    if (msg.getRecipients() != null) {
+                        for (String r : msg.getRecipients()) {
+                            if (r != null) {
+                                String key = r.trim().toLowerCase();
+                                if (!key.isBlank()) {
+                                    perRecipientEmail.put(key, MessageStatus.FAILED);
+                                }
                             }
                         }
+                        msg.setEmailStatuses(perRecipientEmail);
                     }
-                    msg.setEmailStatuses(perRecipientEmail);
                 }
             }
+        } catch (Exception ex) {
+            mailOk = false;
+            org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                    .error("Error enviando correos de mensaje {}: {}", msg.getId(), ex.getMessage());
         }
+
         if (channels.contains("email")) {
             emailStatus = mailOk ? MessageStatus.SENT : MessageStatus.FAILED;
         }
-        if (channels.contains("app")) {
-            List<String> studentRecipients = studentRecipientEmails(msg.getRecipients());
-            if (!studentRecipients.isEmpty()) {
-                appStatus = MessageStatus.PENDING;
-            }
-            List<String> tokens = studentRecipients.isEmpty()
-                    ? List.of()
-                    : deviceTokenService.tokensForRecipients(studentRecipients, schoolId);
-            if (!tokens.isEmpty()) {
-                sendPushNotifications(tokens, subject, msg.getReason(), msg.getId(), schoolId);
-                if (msg.getAppStatuses() != null && !msg.getAppStatuses().isEmpty()) {
-                    Map<String, MessageStatus> updated = new HashMap<>(msg.getAppStatuses());
-                    for (String key : updated.keySet()) {
-                        updated.put(key, MessageStatus.SENT);
-                    }
-                    msg.setAppStatuses(updated);
-                }
-            }
-        }
-        MessageStatus status = mailOk ? MessageStatus.SENT : MessageStatus.FAILED;
-        msg.setStatus(status);
-        msg.setEmailStatus(emailStatus);
-        msg.setAppStatus(appStatus);
-        msg.setScheduledAt(null);
 
         try {
-            tenantMessages(schoolId).document(msg.getId()).set(msg).get();
-        } catch (InterruptedException | ExecutionException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
+            if (channels.contains("app")) {
+                List<String> studentRecipients = studentRecipientEmails(msg.getRecipients());
+                if (!studentRecipients.isEmpty()) {
+                    appStatus = MessageStatus.PENDING;
+                }
+                List<String> tokens = studentRecipients.isEmpty()
+                        ? List.of()
+                        : deviceTokenService.tokensForRecipients(studentRecipients, schoolId);
+                if (!tokens.isEmpty()) {
+                    sendPushNotifications(tokens, subject, msg.getReason(), msg.getId(), schoolId);
+                    if (msg.getAppStatuses() != null && !msg.getAppStatuses().isEmpty()) {
+                        Map<String, MessageStatus> updated = new HashMap<>(msg.getAppStatuses());
+                        for (String key : updated.keySet()) {
+                            updated.put(key, MessageStatus.SENT);
+                        }
+                        msg.setAppStatuses(updated);
+                    }
+                }
             }
-            throw new RuntimeException("Error actualizando mensaje enviado", e);
+        } catch (Exception ex) {
+            appOk = false;
+            appStatus = MessageStatus.FAILED;
+            org.slf4j.LoggerFactory.getLogger(MessageService.class)
+                    .error("Error enviando push de mensaje {}: {}", msg.getId(), ex.getMessage());
+        } finally {
+            MessageStatus status;
+            if (channels.contains("email")) {
+                status = mailOk ? MessageStatus.SENT : MessageStatus.FAILED;
+            } else if (channels.contains("app")) {
+                status = appOk ? MessageStatus.SENT : MessageStatus.FAILED;
+            } else {
+                status = MessageStatus.SENT;
+            }
+            msg.setStatus(status);
+            msg.setEmailStatus(emailStatus);
+            msg.setAppStatus(appStatus);
+            msg.setScheduledAt(null);
+
+            try {
+                tenantMessages(schoolId).document(msg.getId()).set(msg).get();
+            } catch (InterruptedException | ExecutionException e) {
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new RuntimeException("Error actualizando mensaje enviado", e);
+            }
         }
     }
 
@@ -1400,17 +1516,35 @@ public class MessageService {
         }
     }
 
-    public void markEmailOpened(String messageId, String recipientEmail) {
+    public void markEmailOpened(String messageId, String recipientEmail, String schoolIdHint) {
         try {
             if (recipientEmail == null || recipientEmail.isBlank()) {
                 return;
             }
             String normalizedRecipient = recipientEmail.trim().toLowerCase();
-            DocumentReference ref = findMessageRef(messageId, null);
-            if (ref == null) {
+            if (shouldSkipTrackUpdate(messageId, normalizedRecipient)) {
                 return;
             }
-            var snapshot = ref.get().get();
+            DocumentReference ref = null;
+            var snapshot = (com.google.cloud.firestore.DocumentSnapshot) null;
+            if (schoolIdHint != null && !schoolIdHint.isBlank()) {
+                ref = tenantMessages(schoolIdHint).document(messageId);
+                snapshot = ref.get().get();
+                if (!snapshot.exists()) {
+                    ref = null;
+                    snapshot = null;
+                }
+            }
+            if (ref == null) {
+                ref = findMessageRef(messageId, schoolIdHint);
+                if (ref == null && schoolIdHint != null && !schoolIdHint.isBlank()) {
+                    ref = findMessageRef(messageId, null);
+                }
+                if (ref == null) {
+                    return;
+                }
+                snapshot = ref.get().get();
+            }
             MessageDocument msg = snapshot.toObject(MessageDocument.class);
             if (msg == null) {
                 return;
@@ -1418,6 +1552,9 @@ public class MessageService {
             Map<String, MessageStatus> perRecipient = msg.getEmailStatuses() != null
                     ? new HashMap<>(msg.getEmailStatuses())
                     : new HashMap<>();
+            if (perRecipient.get(normalizedRecipient) == MessageStatus.READ) {
+                return;
+            }
             perRecipient.put(normalizedRecipient, MessageStatus.READ);
             msg.setEmailStatuses(perRecipient);
 
@@ -1560,18 +1697,39 @@ public class MessageService {
         return value == null ? "" : value;
     }
 
-    private String appendTrackingPixel(String html, String messageId, String recipient) {
+    private String appendTrackingPixel(String html, String messageId, String recipient, String schoolId) {
         String base = html == null ? "" : html;
-        String url = buildTrackingUrl(messageId, recipient);
+        String url = buildTrackingUrl(messageId, recipient, schoolId);
         if (url == null || url.isBlank()) return base;
         return base + "<img src=\"" + url + "\" alt=\"\" style=\"width:1px;height:1px;display:block;opacity:0;\" />";
     }
 
-    private String buildTrackingUrl(String messageId, String recipient) {
+    private String buildTrackingUrl(String messageId, String recipient, String schoolId) {
         if (messageId == null || recipient == null || recipient.isBlank()) return null;
         String normalizedBase = trackingBaseUrl.endsWith("/") ? trackingBaseUrl.substring(0, trackingBaseUrl.length() - 1) : trackingBaseUrl;
         String safeRecipient = java.net.URLEncoder.encode(recipient, java.nio.charset.StandardCharsets.UTF_8);
-        return normalizedBase + "/messages/" + messageId + "/track?recipient=" + safeRecipient;
+        String url = normalizedBase + "/messages/" + messageId + "/track?recipient=" + safeRecipient;
+        if (schoolId != null && !schoolId.isBlank()) {
+            String safeSchoolId = java.net.URLEncoder.encode(schoolId, java.nio.charset.StandardCharsets.UTF_8);
+            url = url + "&schoolId=" + safeSchoolId;
+        }
+        return url;
+    }
+
+    private boolean shouldSkipTrackUpdate(String messageId, String normalizedRecipient) {
+        if (messageId == null || messageId.isBlank() || normalizedRecipient == null || normalizedRecipient.isBlank()) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        String key = messageId + "|" + normalizedRecipient;
+        Long prev = trackDedupCache.put(key, now);
+        if (trackDedupCache.size() > TRACK_DEDUP_MAX_ENTRIES) {
+            trackDedupCache.entrySet().removeIf(e -> now - e.getValue() > TRACK_DEDUP_WINDOW_MS);
+            if (trackDedupCache.size() > TRACK_DEDUP_MAX_ENTRIES) {
+                trackDedupCache.clear();
+            }
+        }
+        return prev != null && (now - prev) < TRACK_DEDUP_WINDOW_MS;
     }
 
     private String renderContentHtml(String content) {
